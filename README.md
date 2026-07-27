@@ -26,12 +26,13 @@ verified BF16 traces
 
 ## Status
 
-Version 0.2 implements:
+Version 0.2.2 implements:
 
 - symmetric/asymmetric groupwise fake quantization;
 - calibrated SmoothQuant-style per-linear activation balancing;
 - weight and activation fake-quantized `torch.nn.Linear` wrappers;
 - legacy and dynamic KV-cache fake quantization utilities;
+- incremental KV-cache fake quantization during autoregressive decoding;
 - precision-map-controlled module interventions;
 - reasoning-step segmentation and trace schemas;
 - JSD, margin, NLL, bypass-gain and frontier detection;
@@ -71,6 +72,11 @@ python scripts/03a_precision_sweep.py \
   --output artifacts/frontiers/precision_ladder.jsonl \
   --limit 1
 ```
+
+Counterfactual runs show model setup, teacher-forcing window, rollout and
+per-token progress with elapsed time and ETA. Completed traces are
+checkpointed to the requested JSONL output. Pass `--no-progress` only for
+non-interactive jobs that do not need progress bars.
 
 To test activation balancing, calibrate on a disjoint QCal split and select the
 calibrated backend:

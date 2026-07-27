@@ -22,3 +22,16 @@ def test_installed_transformers_dynamic_cache_is_supported():
     assert returned is cache
     assert _first_key(cache).shape == original.shape
     assert not torch.equal(_first_key(cache), original)
+
+
+def test_installed_dynamic_cache_supports_incremental_suffix_quantization():
+    key = torch.randn(1, 2, 3, 8)
+    value = torch.randn(1, 2, 3, 8)
+    cache = DynamicCache()
+    cache.update(key, value, 0)
+    original = _first_key(cache).clone()
+
+    fake_quantize_kv_cache(cache, 4, group_size=4, new_tokens=1)
+
+    assert torch.equal(_first_key(cache)[..., :-1, :], original[..., :-1, :])
+    assert not torch.equal(_first_key(cache)[..., -1:, :], original[..., -1:, :])

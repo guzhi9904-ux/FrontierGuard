@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
@@ -15,6 +16,7 @@ from frontierguard.frontier.counterfactual import (
 )
 from frontierguard.frontier.detector import FrontierDetector
 from frontierguard.frontier.pipeline import (
+    ScanProgressCallback,
     TeacherForcedScan,
     finalize_frontier,
     scan_teacher_forced,
@@ -23,6 +25,9 @@ from frontierguard.frontier.pipeline import (
 from frontierguard.models.hf_runner import HFRunner, SamplingConfig
 from frontierguard.schemas import TraceRecord
 from frontierguard.traces.verify import extract_final_answer, verify_math_answer
+
+
+WorkflowProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
 def trace_input_ids(runner: HFRunner, trace: TraceRecord) -> tuple[torch.Tensor, list[tuple[int, int]]]:
@@ -56,6 +61,7 @@ def scan_trace(
     detector: FrontierDetector | None = None,
     shortlist_size: int = 5,
     low_memory: bool = True,
+    progress_callback: ScanProgressCallback | None = None,
 ) -> TeacherForcedScan:
     input_ids, spans = trace_input_ids(runner, trace)
     scanner = scan_teacher_forced_low_memory if low_memory else scan_teacher_forced
@@ -65,6 +71,7 @@ def scan_trace(
         spans,
         detector=detector,
         shortlist_size=shortlist_size,
+        progress_callback=progress_callback,
     )
 
 
@@ -75,6 +82,7 @@ def counterfactual_trace(
     *,
     seeds: list[int],
     candidate_steps: list[int] | None = None,
+    progress_callback: WorkflowProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Estimate BF16 and quantized success after verified trace prefixes."""
 
@@ -91,11 +99,27 @@ def counterfactual_trace(
     else:
         prefix_indices = list(range(len(ends)))
 
-    def evaluate_condition(full_precision: bool) -> list[PrefixOutcome]:
+    total_rollouts = 2 * len(prefix_indices) * len(seeds)
+    rollout_index = 0
+    if progress_callback is not None:
+        progress_callback(
+            "plan",
+            {
+                "total_rollouts": total_rollouts,
+                "prefixes": len(prefix_indices),
+                "seeds": len(seeds),
+            },
+        )
+
+    def evaluate_condition(
+        condition: str,
+        full_precision: bool,
+    ) -> list[PrefixOutcome]:
+        nonlocal rollout_index
         outcomes: list[PrefixOutcome] = []
         manager = runner.full_precision() if full_precision else contextlib.nullcontext()
         with manager:
-            for prefix_index in prefix_indices:
+            for prefix_position, prefix_index in enumerate(prefix_indices, start=1):
                 response_prefix = response[: ends[prefix_index]]
                 prefix_response_ids = runner.tokenizer(
                     response_prefix, add_special_tokens=False, return_tensors="pt"
@@ -103,14 +127,58 @@ def counterfactual_trace(
                 input_ids = torch.cat((prompt_ids, prefix_response_ids), dim=-1)
 
                 def rollout(_: str, seed: int) -> str:
+                    nonlocal rollout_index
+                    rollout_index += 1
                     config = SamplingConfig(
                         temperature=sampling.temperature,
                         top_p=sampling.top_p,
                         max_new_tokens=sampling.max_new_tokens,
                         seed=seed,
                     )
-                    generated = runner.generate(input_ids, config)["text"]
-                    return response_prefix + generated
+                    details = {
+                        "condition": condition,
+                        "prefix_index": prefix_index,
+                        "prefix_position": prefix_position,
+                        "prefixes": len(prefix_indices),
+                        "seed": seed,
+                        "rollout": rollout_index,
+                        "total_rollouts": total_rollouts,
+                        "max_new_tokens": config.max_new_tokens,
+                    }
+                    if progress_callback is not None:
+                        progress_callback("rollout_start", details)
+
+                    def generation_progress(completed: int, total: int) -> None:
+                        if progress_callback is not None:
+                            progress_callback(
+                                "token",
+                                {
+                                    **details,
+                                    "completed_tokens": completed,
+                                    "max_new_tokens": total,
+                                },
+                            )
+
+                    generated = runner.generate(
+                        input_ids,
+                        config,
+                        progress_callback=(
+                            generation_progress
+                            if progress_callback is not None
+                            else None
+                        ),
+                    )
+                    if progress_callback is not None:
+                        progress_callback(
+                            "rollout_end",
+                            {
+                                **details,
+                                "output_tokens": generated["output_tokens"],
+                                "truncated": generated["truncated"],
+                                "latency_seconds": generated["latency_seconds"],
+                            },
+                        )
+                    return response_prefix + generated["text"]
 
                 def verify(output: str) -> bool:
                     return verify_math_answer(
@@ -120,8 +188,8 @@ def counterfactual_trace(
                 outcomes.append(estimate_prefix_success("", seeds, rollout, verify))
         return outcomes
 
-    fp_outcomes = evaluate_condition(True)
-    quant_outcomes = evaluate_condition(False)
+    fp_outcomes = evaluate_condition("bf16", True)
+    quant_outcomes = evaluate_condition("quantized", False)
     if candidate_steps is None:
         gains = bypass_gains(fp_outcomes, quant_outcomes)
         gain_step_indices = list(range(len(trace.steps)))

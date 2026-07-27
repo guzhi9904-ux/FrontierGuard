@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -26,6 +27,9 @@ class TeacherForcedScan:
     shortlist: list[int]
 
 
+ScanProgressCallback = Callable[[str, int, int], None]
+
+
 @torch.inference_mode()
 def scan_teacher_forced(
     runner: HFRunner,
@@ -34,6 +38,7 @@ def scan_teacher_forced(
     *,
     detector: FrontierDetector | None = None,
     shortlist_size: int = 5,
+    progress_callback: ScanProgressCallback | None = None,
 ) -> TeacherForcedScan:
     """Compare BF16 and quantized logits under exactly the same token prefix.
 
@@ -45,7 +50,11 @@ def scan_teacher_forced(
         raise ValueError("frontier scan needs an instrumented quantization controller")
     with runner.full_precision():
         fp_logits, targets = runner.teacher_forcing(input_ids)
+    if progress_callback is not None:
+        progress_callback("bf16", 1, 1)
     quant_logits, quant_targets = runner.teacher_forcing(input_ids)
+    if progress_callback is not None:
+        progress_callback("quantized", 1, 1)
     if not torch.equal(targets, quant_targets):
         raise RuntimeError("teacher-forcing targets changed between precision conditions")
     signals = token_signals(fp_logits, quant_logits, targets)
@@ -75,6 +84,7 @@ def scan_teacher_forced_low_memory(
     detector: FrontierDetector | None = None,
     shortlist_size: int = 5,
     top_k: int = 32,
+    progress_callback: ScanProgressCallback | None = None,
 ) -> TeacherForcedScan:
     """Step-window scan using an FP top-k + tail JSD partition.
 
@@ -86,7 +96,7 @@ def scan_teacher_forced_low_memory(
         raise ValueError("frontier scan needs an instrumented quantization controller")
     sketches = []
     with runner.full_precision():
-        for start, end in target_spans:
+        for index, (start, end) in enumerate(target_spans, start=1):
             fp_logits, targets = runner.teacher_forcing_window(input_ids, start, end)
             sketch = sketch_logits(fp_logits, targets, top_k=top_k)
             sketches.append(
@@ -99,11 +109,16 @@ def scan_teacher_forced_low_memory(
                 )
             )
             del fp_logits
+            if progress_callback is not None:
+                progress_callback("bf16", index, len(target_spans))
 
     step_jsd: list[float] = []
     step_margin: list[float] = []
     step_nll: list[float] = []
-    for (start, end), cpu_sketch in zip(target_spans, sketches):
+    for index, ((start, end), cpu_sketch) in enumerate(
+        zip(target_spans, sketches),
+        start=1,
+    ):
         quant_logits, targets = runner.teacher_forcing_window(input_ids, start, end)
         device_sketch = type(cpu_sketch)(
             indices=cpu_sketch.indices.to(quant_logits.device),
@@ -119,6 +134,8 @@ def scan_teacher_forced_low_memory(
         )
         step_nll.append(float(comparison["nll_gap"].float().mean().item()))
         del quant_logits
+        if progress_callback is not None:
+            progress_callback("quantized", index, len(target_spans))
 
     active_detector = detector or FrontierDetector()
     shortlist = active_detector.shortlist(step_jsd, step_margin, top_k=shortlist_size)

@@ -107,6 +107,11 @@ python scripts/03b_counterfactual_frontiers.py \
 
 Counterfactual rollout should first be run on the 3–5 shortlisted steps per
 trace. The high-level implementation is in `frontierguard.workflows`.
+The command displays separate teacher-forcing, total-rollout and current-token
+progress bars. Each completed trace is checkpointed to the output JSONL, so a
+later interruption does not discard earlier traces. During cached decoding,
+only the newly appended KV suffix is fake-quantized; historical entries are
+not repeatedly quantized.
 
 The default teacher-forced scan evaluates one step window at a time. It keeps
 exact target NLL and margin but computes JSD on an FP Top-32 plus tail

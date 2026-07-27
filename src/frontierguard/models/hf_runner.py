@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import inspect
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -185,6 +186,8 @@ class HFRunner:
         self,
         prompt_ids: torch.Tensor,
         sampling: SamplingConfig,
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         if prompt_ids.shape[0] != 1:
             raise ValueError("reference runner currently supports batch size 1")
@@ -199,6 +202,7 @@ class HFRunner:
         started = time.perf_counter()
 
         for _ in range(sampling.max_new_tokens):
+            input_token_count = current.shape[-1]
             output = self.model(input_ids=current, past_key_values=cache, use_cache=True)
             logits = output.logits[:, -1, :]
             cache = fake_quantize_kv_cache(
@@ -206,6 +210,7 @@ class HFRunner:
                 self.kv_bits,
                 group_size=self.kv_group_size,
                 symmetric=self.kv_symmetric,
+                new_tokens=input_token_count,
             )
             next_token = sample_top_p(
                 logits,
@@ -216,6 +221,8 @@ class HFRunner:
             token = int(next_token.item())
             generated.append(token)
             current = next_token
+            if progress_callback is not None:
+                progress_callback(len(generated), sampling.max_new_tokens)
             if token in eos_set:
                 break
 
