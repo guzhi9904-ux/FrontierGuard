@@ -1,0 +1,11 @@
+includes:
+  - ../model/ds_r1_qwen_1_5b.yaml
+  - ../quant/uq_w4a4kv4.yaml
+  - ../data/math500.yaml
+experiment:
+  name: e0_reproduce
+  seeds: [0, 1, 2]
+  screening_examples: 200
+  go:
+    minimum_quantization_gap_points: 3.0
+    maximum_truncation_rate: 0.02

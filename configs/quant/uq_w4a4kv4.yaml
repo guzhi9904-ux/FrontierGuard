@@ -1,0 +1,22 @@
+quant:
+  backend: uniform_fake
+  fake_quant: true
+  skip_regex: "(embed_tokens|lm_head|norm)"
+  default:
+    weight_bits: 4
+    activation_bits: 4
+    kv_bits: 4
+    weight_group_size: 128
+    kv_group_size: 128
+    symmetric_weight: true
+    symmetric_activation: true
+    symmetric_kv: false
+  high_precision_action:
+    weight_bits: 8
+    activation_bits: 8
+    kv_bits: 8
+    weight_group_size: 128
+    kv_group_size: 128
+    symmetric_weight: true
+    symmetric_activation: true
+    symmetric_kv: false

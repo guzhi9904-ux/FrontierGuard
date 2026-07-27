@@ -1,0 +1,17 @@
+includes:
+  - ../model/ds_r1_qwen_1_5b.yaml
+  - ../quant/uq_w4a4kv4.yaml
+  - ../data/numinamath_profile.yaml
+experiment:
+  name: e4_allocate
+  split: validation
+  solver: measured_greedy
+  effective_weight_bit_budgets: [4.2, 4.4, 4.8]
+  baselines:
+    - random
+    - first_last
+    - structural
+    - hessian
+    - activation_magnitude
+    - reconstruction_error
+    - output_kl

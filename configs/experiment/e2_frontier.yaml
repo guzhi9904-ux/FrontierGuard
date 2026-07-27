@@ -1,0 +1,19 @@
+includes:
+  - ../model/ds_r1_qwen_1_5b.yaml
+  - ../quant/uq_w4a4kv4.yaml
+  - ../data/numinamath_profile.yaml
+experiment:
+  name: e2_frontier
+  split: profile
+  teacher_forcing:
+    candidate_steps: 5
+    step_quantile: 0.95
+  counterfactual:
+    seeds: [0, 1, 2, 3]
+  detector:
+    jsd_weight: 0.25
+    margin_weight: 0.25
+    bypass_weight: 0.50
+    combined_threshold: 0.5
+    bypass_threshold: 0.0
+    require_persistence: true

@@ -1,0 +1,10 @@
+backends:
+  quantized_reasoning_models:
+    repository: https://github.com/ruikangliu/Quantized-Reasoning-Models
+    revision: null
+  quarot:
+    repository: https://github.com/spcl/QuaRot
+    revision: null
+  flatquant:
+    repository: https://github.com/ruikangliu/FlatQuant
+    revision: null

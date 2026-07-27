@@ -1,0 +1,12 @@
+data:
+  id: AI-MO/NuminaMath-1.5
+  split: train
+  candidate_pool: 1024
+  deduplicate_against:
+    - HuggingFaceH4/MATH-500
+    - AIME-120
+  subsets:
+    qcal: 128
+    profile: 96
+    validation: 32
+  max_correct_traces_per_problem: 2

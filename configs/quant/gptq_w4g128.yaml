@@ -1,0 +1,8 @@
+quant:
+  backend: gptq
+  fake_quant: false
+  weight_bits: 4
+  activation_bits: 16
+  kv_bits: 16
+  group_size: 128
+  calibration_split: qcal

@@ -1,0 +1,5 @@
+data:
+  id: HuggingFaceH4/MATH-500
+  split: test
+  role: evaluation_only
+  final_samples_per_problem: 4

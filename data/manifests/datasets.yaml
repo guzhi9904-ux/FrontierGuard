@@ -1,0 +1,17 @@
+datasets:
+  numinamath:
+    id: AI-MO/NuminaMath-1.5
+    revision: null  # Freeze to a commit hash on the server.
+    role: calibration_and_profiling
+  math500:
+    id: HuggingFaceH4/MATH-500
+    revision: null
+    role: evaluation_only
+  gsm8k:
+    id: openai/gsm8k
+    revision: null
+    role: evaluation_only
+  aime120:
+    source_repository: https://github.com/ruikangliu/Quantized-Reasoning-Models
+    revision: null
+    role: evaluation_only

@@ -1,0 +1,9 @@
+data:
+  id: AIME-120
+  source: Quantized-Reasoning-Models
+  components:
+    - AIME-90
+    - AIME-2025
+  role: evaluation_only
+  screening_samples_per_problem: 3
+  final_samples_per_problem: 8

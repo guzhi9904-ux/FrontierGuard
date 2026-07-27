@@ -1,0 +1,7 @@
+quant:
+  backend: quarot_external
+  fake_quant: true
+  weight_bits: 4
+  activation_bits: 4
+  kv_bits: 4
+  locked_revision_required: true

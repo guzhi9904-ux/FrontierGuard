@@ -1,0 +1,16 @@
+includes:
+  - ../model/ds_r1_qwen_1_5b.yaml
+  - ../quant/uq_w4a4kv4.yaml
+  - ../data/numinamath_profile.yaml
+experiment:
+  name: e3_attribution
+  split: profile
+  coarse:
+    layers_per_block: 4
+    examples: 32
+  fine:
+    examples: 96
+    projections: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  rescue:
+    local_weight: 0.30
+    actions: [bf16_oracle, w8_static]

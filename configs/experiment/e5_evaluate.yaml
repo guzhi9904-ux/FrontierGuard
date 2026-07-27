@@ -1,0 +1,19 @@
+includes:
+  - ../model/ds_r1_qwen_7b.yaml
+  - ../quant/uq_w4a4kv4.yaml
+  - ../data/math500.yaml
+experiment:
+  name: e5_evaluate
+  conditions: [bf16, quant_backbone, strongest_generic_selector, frontierguard]
+  paired_seeds: [0, 1, 2, 3]
+  bootstrap_samples: 10000
+  bootstrap_unit: problem
+  report:
+    - accuracy
+    - gap_recovery
+    - reasoning_tokens
+    - token_inflation_ratio
+    - truncation_rate
+    - effective_weight_bits
+    - kv_bytes_per_token
+    - peak_gpu_memory
