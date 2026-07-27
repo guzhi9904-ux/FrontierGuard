@@ -41,6 +41,11 @@ A trustworthy frontier is the earliest step jointly supported by:
 - target-token margin drop;
 - positive \(B_s\), with a positive confidence lower bound.
 
+Only semantic steps inside the reasoning phase are eligible. For tagged
+reasoning models, content after `</think>` is retained for final-answer
+verification but classified as presentation. Pure headings, answer labels and
+markup transitions are never reasoning-frontier candidates.
+
 More verified prefix normally improves success, so the experiment does not
 define a frontier as “failure probability rising with prefix length.”
 
@@ -95,6 +100,9 @@ The 1.5B model is used for pipeline debugging and model-size sensitivity. The
 7B model is the primary claim model; Llama-8B tests architecture transfer.
 Formal attribution does not proceed when the precision ladder shows global
 distribution saturation (most step JSD values at or above 0.68).
+It also does not proceed from a prompt-only operating point whose quantized
+accuracy is effectively zero or one; the counterfactual detector needs a
+partially recoverable regime.
 
 Generation starts at temperature 0.6, top-p 0.95 and 8192 maximum new tokens.
 Raise the limit if truncation exceeds 2%. Greedy decoding is not used for the
@@ -126,11 +134,20 @@ Report weight bits, activation peak and KV bytes/token separately.
 ## Statistics
 
 - paired seeds across conditions;
+- store each paired seed transition, continuation, extracted answer and
+  truncation flag rather than only aggregated success counts;
+- require at least 4 paired seeds before a per-trace frontier can be labeled
+  trustworthy;
 - bootstrap resampling at the problem level;
 - AIME seeds are aggregated within problem before resampling;
 - report 95% confidence intervals;
 - report accuracy, gap recovery, output tokens, token inflation, truncation,
   effective bits, KV bytes/token and peak memory.
+
+`confidence_level` names the interval coverage (normally 0.95); it is not the
+posterior probability that a detected step is correct. `evidence_score`
+retains the detector's heuristic ranking score and must not be reported as a
+calibrated probability.
 
 ## Scope guard
 

@@ -94,6 +94,13 @@ python scripts/03a_precision_sweep.py \
   --backend smoothquant \
   --calibration-scales artifacts/calibration/sq_1p5b.safetensors \
   --limit 3
+python scripts/03c_operating_point_sweep.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/profile.jsonl \
+  --output artifacts/evaluation/operating_points.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_1p5b.safetensors \
+  --limit 5 --seeds 0
 python scripts/03_scan_frontiers.py \
   --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
   --traces artifacts/traces/profile.jsonl \
@@ -102,7 +109,8 @@ python scripts/03b_counterfactual_frontiers.py \
   --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
   --traces artifacts/traces/profile.jsonl \
   --output artifacts/frontiers/final.jsonl \
-  --seeds 0 1 2 3
+  --seeds 0 1 2 3 \
+  --min-trustworthy-seeds 4
 ```
 
 Counterfactual rollout should first be run on the 3–5 shortlisted steps per
@@ -112,6 +120,14 @@ progress bars. Each completed trace is checkpointed to the output JSONL, so a
 later interruption does not discard earlier traces. During cached decoding,
 only the newly appended KV suffix is fake-quantized; historical entries are
 not repeatedly quantized.
+
+Legacy trace JSON is resegmented at scan time. Steps before `</think>` are
+classified as reasoning; the closing tag and all later answer-presentation
+content remain reconstructable but are excluded from the frontier shortlist.
+Each prefix outcome stores raw per-seed continuations and a paired
+difference-in-differences bootstrap interval. Runs with fewer than
+`--min-trustworthy-seeds` remain valid smoke tests but cannot emit a
+trustworthy frontier.
 
 The default teacher-forced scan evaluates one step window at a time. It keeps
 exact target NLL and margin but computes JSD on an FP Top-32 plus tail

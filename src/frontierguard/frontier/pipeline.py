@@ -21,6 +21,7 @@ from frontierguard.models.hf_runner import HFRunner
 @dataclass
 class TeacherForcedScan:
     token_signals: TokenSignals | None
+    step_indices: list[int]
     step_jsd: list[float]
     step_margin_drop: list[float]
     step_nll_gap: list[float]
@@ -68,6 +69,7 @@ def scan_teacher_forced(
     shortlist = active_detector.shortlist(step_jsd, step_margin, top_k=shortlist_size)
     return TeacherForcedScan(
         token_signals=signals,
+        step_indices=list(range(len(target_spans))),
         step_jsd=step_jsd,
         step_margin_drop=step_margin,
         step_nll_gap=step_nll,
@@ -141,6 +143,7 @@ def scan_teacher_forced_low_memory(
     shortlist = active_detector.shortlist(step_jsd, step_margin, top_k=shortlist_size)
     return TeacherForcedScan(
         token_signals=None,
+        step_indices=list(range(len(target_spans))),
         step_jsd=step_jsd,
         step_margin_drop=step_margin,
         step_nll_gap=step_nll,

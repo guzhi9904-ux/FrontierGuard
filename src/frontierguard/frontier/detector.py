@@ -25,11 +25,14 @@ class FrontierDetectorConfig:
     combined_threshold: float = 0.5
     bypass_threshold: float = 0.0
     require_persistence: bool = True
+    confidence_level: float = 0.95
 
     def validate(self) -> None:
         weights = self.jsd_weight + self.margin_weight + self.bypass_weight
         if not np.isclose(weights, 1.0):
             raise ValueError(f"frontier weights must sum to one; got {weights}")
+        if not 0.0 < self.confidence_level < 1.0:
+            raise ValueError("confidence_level must be in (0, 1)")
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class DetectionResult:
     step_index: int | None
     trustworthy: bool
     confidence: float
+    evidence_score: float
     combined_score: list[float]
 
 
@@ -69,7 +73,7 @@ class FrontierDetector:
         bypass_ci_lower: list[float] | None = None,
     ) -> DetectionResult:
         scores = self.score(jsd, margin_drop, bypass_gain)
-        ci = bypass_ci_lower or bypass_gain
+        ci = bypass_ci_lower if bypass_ci_lower is not None else [0.0] * len(scores)
         for index, (score, gain, lower) in enumerate(zip(scores, bypass_gain, ci)):
             passes = (
                 score > self.config.combined_threshold
@@ -86,9 +90,15 @@ class FrontierDetector:
                 )
                 if not distribution_persists:
                     continue
-            confidence = float(score * max(gain, 0.0))
-            return DetectionResult(index, True, confidence, scores)
-        return DetectionResult(None, False, 0.0, scores)
+            evidence_score = float(score * max(gain, 0.0))
+            return DetectionResult(
+                index,
+                True,
+                self.config.confidence_level,
+                evidence_score,
+                scores,
+            )
+        return DetectionResult(None, False, 0.0, 0.0, scores)
 
     def shortlist(
         self,

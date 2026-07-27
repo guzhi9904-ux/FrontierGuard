@@ -1,6 +1,11 @@
 import torch
 
-from frontierguard.frontier.counterfactual import PrefixOutcome, bypass_gains
+from frontierguard.frontier.counterfactual import (
+    PrefixOutcome,
+    SeedOutcome,
+    bypass_gains,
+    paired_specific_effect,
+)
 from frontierguard.frontier.detector import FrontierDetector, FrontierDetectorConfig
 from frontierguard.frontier.signals import token_signals
 
@@ -38,3 +43,44 @@ def test_detector_selects_earliest_trustworthy_step():
     )
     assert result.trustworthy
     assert result.step_index == 1
+    assert result.confidence == 0.95
+    assert result.evidence_score > 0
+
+
+def _prefix(*values):
+    outcomes = tuple(
+        SeedOutcome(seed=index, success=value)
+        for index, value in enumerate(values)
+    )
+    return PrefixOutcome(sum(values), len(values), outcomes)
+
+
+def test_paired_specific_effect_preserves_seed_transitions():
+    effect = paired_specific_effect(
+        _prefix(True, True, True, True),
+        _prefix(True, True, True, True),
+        _prefix(False, False, False, False),
+        _prefix(True, True, True, False),
+        samples=1000,
+        seed=3,
+    )
+
+    assert effect.trials == 4
+    assert effect.estimate == 0.75
+    assert effect.lower > 0
+    assert [item["specific_delta"] for item in effect.seed_effects] == [1, 1, 1, 0]
+
+
+def test_detector_never_claims_trust_without_a_confidence_lower_bound():
+    detector = FrontierDetector(
+        FrontierDetectorConfig(
+            combined_threshold=-1.0,
+            require_persistence=False,
+        )
+    )
+    result = detector.detect(
+        jsd=[0.1, 0.4],
+        margin_drop=[0.1, 0.4],
+        bypass_gain=[0.0, 1.0],
+    )
+    assert not result.trustworthy

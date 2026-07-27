@@ -72,6 +72,9 @@ class ReasoningStep:
     char_end: int
     token_start: int | None = None
     token_end: int | None = None
+    phase: str = "reasoning"
+    kind: str = "content"
+    eligible: bool = True
 
 
 @dataclass

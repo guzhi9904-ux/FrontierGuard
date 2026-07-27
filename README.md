@@ -26,13 +26,15 @@ verified BF16 traces
 
 ## Status
 
-Version 0.2.2 implements:
+Version 0.3.0 implements:
 
 - symmetric/asymmetric groupwise fake quantization;
 - calibrated SmoothQuant-style per-linear activation balancing;
 - weight and activation fake-quantized `torch.nn.Linear` wrappers;
 - legacy and dynamic KV-cache fake quantization utilities;
 - incremental KV-cache fake quantization during autoregressive decoding;
+- phase-aware reasoning/presentation segmentation and structural-step filtering;
+- raw per-seed counterfactual continuations and paired bootstrap intervals;
 - precision-map-controlled module interventions;
 - reasoning-step segmentation and trace schemas;
 - JSD, margin, NLL, bypass-gain and frontier detection;
@@ -71,6 +73,18 @@ python scripts/03a_precision_sweep.py \
   --traces artifacts/traces/pilot.jsonl \
   --output artifacts/frontiers/precision_ladder.jsonl \
   --limit 1
+```
+
+Screen prompt-only operating points before launching prefix rollouts:
+
+```bash
+python scripts/03c_operating_point_sweep.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/profile.jsonl \
+  --output artifacts/evaluation/operating_points.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_1p5b.safetensors \
+  --limit 5 --seeds 0
 ```
 
 Counterfactual runs show model setup, teacher-forcing window, rollout and

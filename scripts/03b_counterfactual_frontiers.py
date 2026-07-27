@@ -9,6 +9,7 @@ from typing import Any
 
 from tqdm.auto import tqdm
 
+from frontierguard import __version__
 from frontierguard.io import read_jsonl, write_jsonl
 from frontierguard.models.hf_runner import HFRunner, SamplingConfig
 from frontierguard.quant.factory import REFERENCE_BACKENDS, instrument_reference_backend
@@ -16,6 +17,7 @@ from frontierguard.schemas import PrecisionAction, PrecisionMap, ReasoningStep, 
 from frontierguard.workflows import (
     complete_frontier,
     counterfactual_trace,
+    prepare_trace_steps,
     scan_trace,
 )
 
@@ -70,6 +72,7 @@ class _CounterfactualProgress:
                     tokens=details["output_tokens"],
                     seconds=f"{details['latency_seconds']:.1f}",
                     truncated=details["truncated"],
+                    correct=details["success"],
                     refresh=True,
                 )
 
@@ -110,12 +113,28 @@ def main() -> None:
     parser.add_argument("--saturation-threshold", type=float, default=0.68)
     parser.add_argument("--max-saturation-fraction", type=float, default=0.8)
     parser.add_argument("--allow-saturated", action="store_true")
+    parser.add_argument("--bootstrap-samples", type=int, default=5000)
+    parser.add_argument("--confidence-level", type=float, default=0.95)
+    parser.add_argument("--min-trustworthy-seeds", type=int, default=4)
     parser.add_argument(
         "--no-progress",
         action="store_true",
         help="disable scan, rollout and token progress bars",
     )
     args = parser.parse_args()
+    if args.bootstrap_samples <= 0:
+        raise ValueError("--bootstrap-samples must be positive")
+    if not 0.0 < args.confidence_level < 1.0:
+        raise ValueError("--confidence-level must be in (0, 1)")
+    if args.min_trustworthy_seeds <= 0:
+        raise ValueError("--min-trustworthy-seeds must be positive")
+    if len(args.seeds) < args.min_trustworthy_seeds:
+        print(
+            f"[warning] {len(args.seeds)} seeds are enough for a smoke test but "
+            f"fewer than --min-trustworthy-seeds={args.min_trustworthy_seeds}; "
+            "frontiers will not be labeled trustworthy",
+            flush=True,
+        )
 
     raw_traces = list(read_jsonl(args.traces))
     if not raw_traces:
@@ -149,13 +168,25 @@ def main() -> None:
     rows = []
     for trace_number, raw in enumerate(raw_traces, start=1):
         trace = _trace(raw)
+        prepare_trace_steps(runner, trace)
+        eligible_steps = [step for step in trace.steps if step.eligible]
+        presentation_steps = [
+            step for step in trace.steps if step.phase == "presentation"
+        ]
+        excluded_reasoning_steps = [
+            step
+            for step in trace.steps
+            if step.phase == "reasoning" and not step.eligible
+        ]
         print(
             f"[trace {trace_number}/{len(raw_traces)}] "
-            f"{trace.problem_id}: teacher-forcing scan",
+            f"{trace.problem_id}: {len(eligible_steps)} reasoning steps, "
+            f"{len(presentation_steps)} presentation steps, "
+            f"{len(excluded_reasoning_steps)} structural reasoning steps excluded",
             flush=True,
         )
         scan_progress = tqdm(
-            total=2 * len(trace.steps),
+            total=2 * len(eligible_steps),
             desc=f"scan {trace.problem_id}",
             unit="window",
             dynamic_ncols=True,
@@ -208,19 +239,48 @@ def main() -> None:
                 progress_callback=(
                     None if args.no_progress else rollout_progress
                 ),
+                bootstrap_samples=args.bootstrap_samples,
+                confidence_level=args.confidence_level,
+                min_trustworthy_seeds=args.min_trustworthy_seeds,
             )
         finally:
             rollout_progress.close()
         result = complete_frontier(scan, counterfactual)
+        quant_successes = sum(
+            outcome["successes"]
+            for outcome in counterfactual["quant_outcomes"]
+        )
+        quant_trials = sum(
+            outcome["trials"]
+            for outcome in counterfactual["quant_outcomes"]
+        )
+        counterfactual_status = (
+            "all_quantized_fail"
+            if quant_successes == 0
+            else "all_quantized_succeed"
+            if quant_successes == quant_trials
+            else "partially_recoverable"
+        )
         result.update(
             {
+                "frontierguard_version": __version__,
                 "problem_id": trace.problem_id,
                 "seed": trace.seed,
                 "action": asdict(low),
                 "quantization": runner.controller.metadata(),
                 "shortlist": scan.shortlist,
+                "candidate_step_metadata": [
+                    asdict(trace.steps[index]) for index in scan.shortlist
+                ],
+                "segmentation": {
+                    "reasoning_steps": len(eligible_steps),
+                    "presentation_steps": len(presentation_steps),
+                    "excluded_reasoning_steps": len(excluded_reasoning_steps),
+                    "frontier_scope": "eligible_reasoning_only",
+                },
                 "jsd_saturation_threshold": args.saturation_threshold,
                 "jsd_saturation_fraction": saturation_fraction,
+                "counterfactual_status": counterfactual_status,
                 "counterfactual": counterfactual,
             }
         )

@@ -64,10 +64,14 @@ def main() -> None:
                 "seed": trace.seed,
                 "action": asdict(action),
                 "quantization": controller.metadata(),
+                "step_indices": scan.step_indices,
                 "step_jsd": scan.step_jsd,
                 "step_margin_drop": scan.step_margin_drop,
                 "step_nll_gap": scan.step_nll_gap,
                 "shortlist": scan.shortlist,
+                "candidate_step_metadata": [
+                    asdict(trace.steps[index]) for index in scan.shortlist
+                ],
                 "jsd_saturation_threshold": args.saturation_threshold,
                 "jsd_saturation_fraction": saturation_fraction,
                 "globally_saturated": saturation_fraction >= 0.8,
