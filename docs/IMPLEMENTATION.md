@@ -65,6 +65,11 @@ Do not import an upstream repository throughout the frontier code. Keep all
 version-specific imports in one backend adapter and record the exact commit in
 `third_party/locked_revisions.yaml`.
 
+The repository additionally contains a calibrated SmoothQuant-style reference
+backend. It gathers per-input-channel activation maxima on disjoint QCal data
+and evaluates `(X / s)(W * s)^T` before fake quantization. It is a transparent
+mechanism backend, not a replacement for the formal FlatQuant/QuaRot runs.
+
 ## 4090 execution
 
 Recommended first run:
@@ -77,6 +82,18 @@ python scripts/02_generate_traces.py \
   --input data/raw/profile_candidates.jsonl \
   --output artifacts/traces/profile.jsonl \
   --max-new-tokens 8192 --seeds 0 1
+python scripts/02b_calibrate_smoothquant.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --input artifacts/traces/qcal.jsonl \
+  --output artifacts/calibration/sq_1p5b.safetensors \
+  --alpha 0.5 --max-samples 32
+python scripts/03a_precision_sweep.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/profile.jsonl \
+  --output artifacts/frontiers/precision_ladder.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_1p5b.safetensors \
+  --limit 3
 python scripts/03_scan_frontiers.py \
   --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
   --traces artifacts/traces/profile.jsonl \

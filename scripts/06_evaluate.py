@@ -7,7 +7,7 @@ from dataclasses import asdict
 
 from frontierguard.io import read_json, read_jsonl, write_jsonl
 from frontierguard.models.hf_runner import HFRunner, SamplingConfig
-from frontierguard.quant.controller import instrument_linear_layers
+from frontierguard.quant.factory import REFERENCE_BACKENDS, instrument_reference_backend
 from frontierguard.schemas import GenerationRecord, PrecisionMap
 from frontierguard.traces.verify import extract_final_answer, verify_math_answer
 from frontierguard.utils.reproducibility import stable_run_id
@@ -16,20 +16,27 @@ from frontierguard.utils.reproducibility import stable_run_id
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
+    parser.add_argument("--revision")
     parser.add_argument("--input", required=True, help="JSONL: id, problem, answer")
     parser.add_argument("--output", required=True)
     parser.add_argument("--condition", required=True)
     parser.add_argument("--precision-map")
+    parser.add_argument("--backend", choices=REFERENCE_BACKENDS, default="rtn")
+    parser.add_argument("--calibration-scales")
     parser.add_argument("--seeds", type=int, nargs="+", default=[0])
     parser.add_argument("--max-new-tokens", type=int, default=8192)
     args = parser.parse_args()
 
-    runner = HFRunner.from_pretrained(args.model)
+    runner = HFRunner.from_pretrained(args.model, revision=args.revision)
     precision_map = None
     if args.precision_map:
         precision_map = PrecisionMap.from_dict(read_json(args.precision_map))
-        runner.controller = instrument_linear_layers(
-            runner.model, precision_map, materialize_weights=True
+        runner.controller = instrument_reference_backend(
+            runner.model,
+            precision_map,
+            backend=args.backend,
+            calibration_scales=args.calibration_scales,
+            materialize_weights=True,
         )
         runner.kv_bits = precision_map.default.kv_bits
         runner.kv_group_size = precision_map.default.kv_group_size
@@ -37,7 +44,11 @@ def main() -> None:
     run_id = stable_run_id(
         {
             "model": args.model,
+            "model_revision": args.revision,
             "condition": args.condition,
+            "backend": (
+                runner.controller.metadata() if runner.controller is not None else "bf16"
+            ),
             "precision_map": precision_map.to_dict() if precision_map else None,
             "seeds": args.seeds,
             "max_new_tokens": args.max_new_tokens,
@@ -63,6 +74,14 @@ def main() -> None:
                 output_tokens=generated["output_tokens"],
                 truncated=generated["truncated"],
                 latency_seconds=generated["latency_seconds"],
+                metadata={
+                    "model_revision": args.revision,
+                    "quantization": (
+                        runner.controller.metadata()
+                        if runner.controller is not None
+                        else {"backend": "bf16"}
+                    ),
+                },
             )
             records.append(asdict(record))
     write_jsonl(args.output, records)

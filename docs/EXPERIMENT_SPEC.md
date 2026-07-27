@@ -84,9 +84,17 @@ Evaluation:
 Quantization:
 
 - BF16 and W8A8KV8 controls;
-- RTN/GPTQ/AWQ W4A16;
-- uniform, QuaRot and FlatQuant W4A4KV4;
+- GPTQ/AWQ W4A16 weight-only baselines;
+- SmoothQuant W8A8 weight-activation baseline;
+- uniform RTN W4A4KV4 as a diagnostic lower bound only;
+- FlatQuant W4A4 as the primary strong PTQ backend;
+- QuaRot W4A4KV4 as a rotation-based transfer backend;
 - W4 backbone plus FrontierGuard-selected W8 modules.
+
+The 1.5B model is used for pipeline debugging and model-size sensitivity. The
+7B model is the primary claim model; Llama-8B tests architecture transfer.
+Formal attribution does not proceed when the precision ladder shows global
+distribution saturation (most step JSD values at or above 0.68).
 
 Generation starts at temperature 0.6, top-p 0.95 and 8192 maximum new tokens.
 Raise the limit if truncation exceeds 2%. Greedy decoding is not used for the

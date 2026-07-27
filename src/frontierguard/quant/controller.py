@@ -5,7 +5,9 @@ from __future__ import annotations
 import contextlib
 import re
 from collections.abc import Iterator, Sequence
+from typing import Any
 
+import torch
 from torch import nn
 
 from frontierguard.quant.linear import FakeQuantLinear
@@ -28,13 +30,36 @@ def _set_child(parent: nn.Module, key: str, value: nn.Module) -> None:
 
 
 class QuantizationController:
-    def __init__(self, model: nn.Module, wrappers: dict[str, FakeQuantLinear]):
+    def __init__(
+        self,
+        model: nn.Module,
+        wrappers: dict[str, FakeQuantLinear],
+        *,
+        backend_metadata: dict[str, Any] | None = None,
+    ):
         self.model = model
         self.wrappers = wrappers
+        self.backend_metadata = dict(
+            backend_metadata
+            or {
+                "backend": "rtn",
+                "fake_quant": True,
+                "packed_kernel": False,
+            }
+        )
 
     @property
     def module_names(self) -> list[str]:
         return sorted(self.wrappers)
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            **self.backend_metadata,
+            "instrumented_linear_modules": len(self.wrappers),
+            "smoothed_linear_modules": sum(
+                wrapper.has_input_scale for wrapper in self.wrappers.values()
+            ),
+        }
 
     def set_precision_map(self, precision_map: PrecisionMap) -> None:
         for name, wrapper in self.wrappers.items():
@@ -121,6 +146,8 @@ def instrument_linear_layers(
     include: str | None = None,
     exclude: str | None = r"(lm_head|embed_tokens)",
     materialize_weights: bool = False,
+    input_scales: dict[str, torch.Tensor] | None = None,
+    backend_metadata: dict[str, Any] | None = None,
 ) -> QuantizationController:
     """Wrap selected Linear modules in place and return a controller."""
 
@@ -136,12 +163,24 @@ def instrument_linear_layers(
         and (exclude_pattern is None or not exclude_pattern.search(name))
     ]
     wrappers: dict[str, FakeQuantLinear] = {}
+    scale_map = input_scales or {}
+    unknown_scales = sorted(set(scale_map) - {name for name, _ in candidates})
+    if unknown_scales:
+        preview = ", ".join(unknown_scales[:3])
+        raise KeyError(f"calibration scales reference unknown modules: {preview}")
     for name, module in candidates:
-        wrapper = FakeQuantLinear(module, name, precision_map.action_for(name))
+        wrapper = FakeQuantLinear(
+            module,
+            name,
+            precision_map.action_for(name),
+            input_scale=scale_map.get(name),
+        )
         parent, key = _parent_and_key(model, name)
         _set_child(parent, key, wrapper)
         wrappers[name] = wrapper
-    controller = QuantizationController(model, wrappers)
+    controller = QuantizationController(
+        model, wrappers, backend_metadata=backend_metadata
+    )
     if materialize_weights:
         controller.materialize_weights()
     return controller

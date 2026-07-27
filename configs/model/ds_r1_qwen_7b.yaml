@@ -6,6 +6,8 @@ model:
   device_map: auto
   trust_remote_code: false
   max_model_length: 8192
+  experiment_role: primary_accuracy_and_attribution
+  formal_primary: true
 generation:
   temperature: 0.6
   top_p: 0.95

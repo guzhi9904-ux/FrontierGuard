@@ -10,7 +10,7 @@ from frontierguard.attribution.rescue import RescueObservation
 from frontierguard.io import read_jsonl, write_jsonl
 from frontierguard.models.adapters import infer_adapter
 from frontierguard.models.hf_runner import HFRunner
-from frontierguard.quant.controller import instrument_linear_layers
+from frontierguard.quant.factory import REFERENCE_BACKENDS, instrument_reference_backend
 from frontierguard.schemas import PrecisionAction, PrecisionMap, ReasoningStep, TraceRecord
 from frontierguard.workflows import trace_input_ids
 
@@ -25,10 +25,22 @@ def _trace(row: dict) -> TraceRecord:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
+    parser.add_argument("--revision")
     parser.add_argument("--traces", required=True)
     parser.add_argument("--frontiers", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--grouping", choices=["module", "projection", "layer", "block"], default="block")
+    parser.add_argument("--backend", choices=REFERENCE_BACKENDS, default="rtn")
+    parser.add_argument("--calibration-scales")
+    parser.add_argument("--weight-bits", type=int, default=4)
+    parser.add_argument("--activation-bits", type=int, default=4)
+    parser.add_argument("--kv-bits", type=int, default=4)
+    parser.add_argument("--high-bits", type=int, default=8)
+    parser.add_argument("--group-size", type=int, default=128)
+    parser.add_argument(
+        "--grouping",
+        choices=["module", "projection", "layer", "block"],
+        default="block",
+    )
     parser.add_argument("--layers-per-block", type=int, default=4)
     parser.add_argument("--bf16-oracle", action="store_true")
     args = parser.parse_args()
@@ -37,9 +49,21 @@ def main() -> None:
         (trace.problem_id, trace.seed): trace
         for trace in (_trace(row) for row in read_jsonl(args.traces))
     }
-    runner = HFRunner.from_pretrained(args.model)
-    low = PrecisionAction(4, 4, 4)
-    high = PrecisionAction(8, 8, 8)
+    runner = HFRunner.from_pretrained(args.model, revision=args.revision)
+    low = PrecisionAction(
+        args.weight_bits,
+        args.activation_bits,
+        args.kv_bits,
+        weight_group_size=args.group_size,
+        kv_group_size=args.group_size,
+    )
+    high = PrecisionAction(
+        args.high_bits,
+        args.high_bits,
+        args.high_bits,
+        weight_group_size=args.group_size,
+        kv_group_size=args.group_size,
+    )
     adapter = infer_adapter(runner.model)
     descriptors = adapter.describe_modules(runner.model)
     if args.grouping == "module":
@@ -64,8 +88,12 @@ def main() -> None:
             ).items()
             if name.startswith("block_")
         }
-    controller = instrument_linear_layers(
-        runner.model, PrecisionMap(default=low), materialize_weights=True
+    controller = instrument_reference_backend(
+        runner.model,
+        PrecisionMap(default=low),
+        backend=args.backend,
+        calibration_scales=args.calibration_scales,
+        materialize_weights=True,
     )
     runner.controller = controller
 
@@ -97,6 +125,12 @@ def main() -> None:
                     local_rescue=rescue,
                     outcome_rescue=0.0,
                     frontier_confidence=float(frontier.get("confidence", 1.0)),
+                    metadata={
+                        "quantization": controller.metadata(),
+                        "low_action": asdict(low),
+                        "high_action": None if args.bf16_oracle else asdict(high),
+                        "bf16_oracle": args.bf16_oracle,
+                    },
                 )
             )
     write_jsonl(args.output, (asdict(item) for item in observations))

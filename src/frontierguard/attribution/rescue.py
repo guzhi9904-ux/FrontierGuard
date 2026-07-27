@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
-from typing import Iterable
+from dataclasses import dataclass, field
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -18,6 +18,7 @@ class RescueObservation:
     local_rescue: float
     outcome_rescue: float
     frontier_confidence: float = 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def combined(self, local_weight: float = 0.3) -> float:
         return self.frontier_confidence * (

@@ -26,9 +26,10 @@ verified BF16 traces
 
 ## Status
 
-Version 0.1 implements:
+Version 0.2 implements:
 
 - symmetric/asymmetric groupwise fake quantization;
+- calibrated SmoothQuant-style per-linear activation balancing;
 - weight and activation fake-quantized `torch.nn.Linear` wrappers;
 - legacy and dynamic KV-cache fake quantization utilities;
 - precision-map-controlled module interventions;
@@ -42,6 +43,8 @@ Version 0.1 implements:
 
 Real QuaRot/FlatQuant kernels are external backends. Their revisions must be
 locked before publication; no third-party source is copied into this repo.
+Uniform RTN is a diagnostic lower bound, not the formal W4A4 baseline. See
+[the backend policy](docs/QUANTIZATION_BACKENDS.md).
 
 ## Install
 
@@ -59,6 +62,32 @@ frontierguard smoke-quant
 frontierguard audit-env --output environment.json
 ```
 
+Before an expensive counterfactual run, execute the precision ladder:
+
+```bash
+python scripts/03a_precision_sweep.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/pilot.jsonl \
+  --output artifacts/frontiers/precision_ladder.jsonl \
+  --limit 1
+```
+
+To test activation balancing, calibrate on a disjoint QCal split and select the
+calibrated backend:
+
+```bash
+python scripts/02b_calibrate_smoothquant.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --input artifacts/traces/qcal.jsonl \
+  --output artifacts/calibration/sq_1p5b.safetensors
+python scripts/03_scan_frontiers.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/profile.jsonl \
+  --output artifacts/frontiers/sq_scan.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_1p5b.safetensors
+```
+
 Inspect a configuration:
 
 ```bash
@@ -69,7 +98,8 @@ frontierguard show-config configs/experiment/e2_frontier.yaml
 
 Models:
 
-1. `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` for pipeline validation.
+1. `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` for pipeline validation and
+   model-size sensitivity, not the primary claim.
 2. `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B` for primary experiments.
 3. `deepseek-ai/DeepSeek-R1-Distill-Llama-8B` for architecture transfer.
 
