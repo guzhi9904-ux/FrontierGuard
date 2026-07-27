@@ -76,18 +76,25 @@ class HFRunner:
         device_map: str | dict[str, Any] | None = "auto",
         trust_remote_code: bool = False,
     ) -> "HFRunner":
+        import transformers
+        from packaging.version import Version
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         torch_dtype = getattr(torch, dtype)
         tokenizer = AutoTokenizer.from_pretrained(
             model_id, revision=revision, trust_remote_code=trust_remote_code
         )
+        dtype_argument = (
+            {"dtype": torch_dtype}
+            if Version(transformers.__version__) >= Version("4.56.0")
+            else {"torch_dtype": torch_dtype}
+        )
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
             revision=revision,
-            torch_dtype=torch_dtype,
             device_map=device_map,
             trust_remote_code=trust_remote_code,
+            **dtype_argument,
         )
         model.eval()
         return cls(model, tokenizer)

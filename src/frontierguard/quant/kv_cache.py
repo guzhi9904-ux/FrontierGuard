@@ -37,6 +37,7 @@ def fake_quantize_kv_cache(
 
     if cache is None or bits >= 16:
         return cache
+    # Transformers <=4.56 exposed parallel key_cache/value_cache lists.
     if hasattr(cache, "key_cache") and hasattr(cache, "value_cache"):
         for index, (key, value) in enumerate(zip(cache.key_cache, cache.value_cache)):
             quantized_key, quantized_value = _quantize_pair(
@@ -44,6 +45,25 @@ def fake_quantize_kv_cache(
             )
             cache.key_cache[index] = quantized_key
             cache.value_cache[index] = quantized_value
+        return cache
+    # Transformers >=4.57 stores state in CacheLayer objects. Keep the cache
+    # object and its layer metadata intact; replacing it with a legacy tuple
+    # would discard sliding-window/offloading behavior.
+    if hasattr(cache, "layers"):
+        for index, layer in enumerate(cache.layers):
+            if not hasattr(layer, "keys") or not hasattr(layer, "values"):
+                raise TypeError(
+                    f"unsupported KV cache layer at index {index}: {type(layer)!r}"
+                )
+            key = layer.keys
+            value = layer.values
+            if key is None or value is None:
+                continue
+            quantized_key, quantized_value = _quantize_pair(
+                key, value, bits, group_size, symmetric
+            )
+            layer.keys = quantized_key
+            layer.values = quantized_value
         return cache
     if isinstance(cache, (tuple, list)):
         quantized_layers = []
