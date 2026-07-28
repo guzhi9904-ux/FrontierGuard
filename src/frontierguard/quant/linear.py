@@ -26,6 +26,11 @@ class FakeQuantLinear(nn.Module):
         self.module_name = module_name
         self.action = action
         self.quantization_enabled = True
+        # Disabled by default because reference fake quantization should match
+        # ordinary PTQ inference semantics. Attribution may temporarily enable
+        # an identity straight-through gradient without changing forward
+        # quantized values.
+        self.gradient_ste_enabled = False
         if input_scale is not None and input_scale.numel() != linear.in_features:
             raise ValueError(
                 f"input scale width mismatch for {module_name}: "
@@ -169,6 +174,7 @@ class FakeQuantLinear(nn.Module):
             group_size=-1,
             axis=-1,
             symmetric=self.action.symmetric_activation,
+            ste=self.gradient_ste_enabled,
         )
         quantized_weight = self._weight_for_forward()
         return F.linear(quantized_inputs, quantized_weight, self.linear.bias)

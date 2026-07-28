@@ -26,7 +26,7 @@ verified BF16 traces
 
 ## Status
 
-Version 0.3.1 implements:
+Version 0.4.0 implements:
 
 - symmetric/asymmetric groupwise fake quantization;
 - calibrated SmoothQuant-style per-linear activation balancing;
@@ -41,6 +41,10 @@ Version 0.3.1 implements:
 - separate first-error, recovery-frontier and frontier-window diagnostics;
 - rollout failure taxonomy for wrong answers, repetition and truncation;
 - precision-map-controlled module interventions;
+- frontier-conditioned BF16-to-quantized projection damage attribution;
+- optional exact activation patches for predicted and matched-random modules;
+- problem-level bootstrap stability and normalized-depth transfer summaries;
+- BF16-correct/quantized-failing cohort construction;
 - reasoning-step segmentation and trace schemas;
 - JSD, margin, NLL, bypass-gain and frontier detection;
 - module rescue aggregation and pairwise interaction metrics;
@@ -157,6 +161,38 @@ python scripts/04_run_attribution.py \
   --grouping layer_family \
   --include-group-regex '^layer_(13|16)\.'
 ```
+
+The next-stage attribution does not assume that a layer found on one trace is
+globally important. Build a multi-problem failure cohort, score projection
+damage at each detected frontier, and compare discovery/validation or
+different architectures:
+
+```bash
+python scripts/03e_build_failure_cohort.py \
+  --operating-points artifacts/evaluation/profile_operating_points.jsonl \
+  --traces artifacts/traces/profile.jsonl \
+  --quant-condition w4a8kv16 \
+  --output-traces artifacts/traces/profile_w4a8_failure_cohort.jsonl
+
+python scripts/04c_frontier_damage_patching.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/profile_w4a8_failure_cohort.jsonl \
+  --frontiers artifacts/frontiers/profile_w4a8_frontiers.jsonl \
+  --output artifacts/attribution/profile_w4a8kv16_damage_v040.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_1p5b.safetensors \
+  --weight-bits 4 --activation-bits 8 --kv-bits 16 \
+  --exact-top-k 5 --exact-random-k 5
+
+python scripts/04d_summarize_damage_stability.py \
+  --scores profile=artifacts/attribution/profile_damage.jsonl \
+  --scores validation=artifacts/attribution/validation_damage.jsonl \
+  --output reports/damage_stability_v040.json
+```
+
+The gradient score is explicitly labeled as an STE first-order estimator.
+Exact patches and final prompt-only selective-rescue generation remain
+separate validation stages.
 
 To test activation balancing, calibrate on a disjoint QCal split and select the
 calibrated backend:

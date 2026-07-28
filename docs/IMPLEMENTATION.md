@@ -31,10 +31,12 @@ Teacher forcing uses:
 logits[:, j] -> input_ids[:, j + 1]
 ```
 
-Step spans returned by `trace_input_ids` are positions in the target vector
-`input_ids[:, 1:]`. Attribution converts them back to input-token indices by
-adding one. Tests should be added for every new tokenizer family because a
-one-token shift invalidates first-error localization.
+Step spans returned by `trace_input_ids` are logit positions in the
+teacher-forcing target vector: logit position `j` predicts input token
+`j + 1`. The legacy local-NLL helper accepts input-token indices and therefore
+adds one; compression-damage patching consumes the logit spans directly.
+Tests should be added for every new tokenizer family because a one-token shift
+invalidates first-error localization.
 
 ## Intervention hierarchy
 
@@ -180,6 +182,63 @@ as JSON `null`, not a misleading zero. Local attribution additionally stores
 baseline and rescued NLL separately. Use `layer_family` grouping plus
 `--include-group-regex` to split shortlisted layers before projection-level
 scans.
+
+### Multi-problem compression-damage experiment
+
+Do not infer stable modules from a single pilot trace. First screen a prompt-
+only operating point, then materialize the BF16-correct/quantized-failing
+cohort:
+
+```bash
+python scripts/03e_build_failure_cohort.py \
+  --operating-points artifacts/evaluation/profile_operating_points.jsonl \
+  --traces artifacts/traces/profile.jsonl \
+  --quant-condition w4a8kv16 \
+  --output-traces artifacts/traces/profile_w4a8_failure_cohort.jsonl \
+  --minimum-problems 20
+```
+
+Run counterfactual frontier detection on that cohort, then score every named
+Transformer projection with one BF16 forward and one quantized surrogate
+backward per trace. Only predicted top modules and matched projection controls
+receive expensive exact activation patches:
+
+```bash
+python scripts/04c_frontier_damage_patching.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/profile_w4a8_failure_cohort.jsonl \
+  --frontiers artifacts/frontiers/profile_w4a8_frontiers.jsonl \
+  --output artifacts/attribution/profile_w4a8kv16_damage_v040.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_1p5b.safetensors \
+  --weight-bits 4 --activation-bits 8 --kv-bits 16 \
+  --target-scope window --max-window-tokens 128 \
+  --exact-top-k 5 --exact-random-k 5
+```
+
+The 128-token cap is centered on the selected frontier step and bounds CPU
+capture and backward memory. Reduce it to 64 for 7B/8B models if necessary.
+The estimator uses an identity STE through activation fake quantizers; the
+JSON records that surrogate explicitly. Forward values remain ordinary
+quantize/dequantize values.
+
+Run profile and validation independently. The first `--scores` input is the
+discovery split:
+
+```bash
+python scripts/04d_summarize_damage_stability.py \
+  --scores profile=artifacts/attribution/profile_damage.jsonl \
+  --scores validation=artifacts/attribution/validation_damage.jsonl \
+  --scores llama8b=artifacts/attribution/llama8b_damage.jsonl \
+  --output reports/damage_stability_v040.json \
+  --top-k 10 --depth-bins 4
+```
+
+The summary averages repeated trace seeds inside each problem, bootstraps
+problems, reports exact-module and normalized-depth stability separately, and
+labels fewer than 20 problems as pilot-only evidence. Selected projections
+must still pass `04b_evaluate_selective_rescue.py` from the original prompt;
+activation patching is mechanism evidence, not final accuracy.
 
 ## Known v0.1 limitations
 

@@ -2,9 +2,10 @@
 
 ## Primary claim
 
-FrontierGuard tests whether first-error-frontier causal rescue selects a small,
-stable set of high-precision Transformer modules that restores reasoning
-accuracy more effectively than generic sensitivity metrics at equal cost.
+FrontierGuard tests whether compression damage measured at a first-error
+frontier predicts budget-controlled reasoning recovery more effectively than
+generic sensitivity metrics. It does not assume in advance that one fixed set
+of Transformer layers is responsible for every failure.
 
 The publishable loop is:
 
@@ -79,8 +80,25 @@ Restoring one module inside \(Q\) is the correct intervention. Quantizing one
 module inside a BF16 model answers a different question because the module sees
 a BF16 context.
 
-The deployable first-stage action is W8A8/KV8. BF16 restoration is an oracle
-upper bound.
+The deployable first-stage action raises selected components from the active
+low-precision operating point, for example W4 to W8 while leaving A8/KV16
+unchanged. BF16 activation patching is an oracle mechanism test, not the
+deployed precision action.
+
+Version 0.4.0 adds compression-damage attribution. For projection \(m\) and
+frontier-token set \(T\), it records BF16 and quantized outputs under an
+identical verified prefix and estimates:
+
+\[
+\widehat R_m =
+-\nabla_{h_m^Q}L_Q(T)^\top(h_m^F-h_m^Q).
+\]
+
+A positive value predicts that replacing the quantized projection output by
+its BF16 counterpart lowers frontier-window NLL. Activation fake quantizers
+use an identity straight-through gradient for this estimator only; exact
+activation patches validate selected scores with unchanged quantized forward
+values. Neither score proves that a module uniquely stores a reasoning skill.
 
 ## Frozen initial matrix
 
@@ -108,6 +126,8 @@ Quantization:
 - BF16 and W8A8KV8 controls;
 - GPTQ/AWQ W4A16 weight-only baselines;
 - SmoothQuant W8A8 weight-activation baseline;
+- W4A8KV16 as a partially recoverable mechanism operating point, not the only
+  paper setting;
 - uniform RTN W4A4KV4 as a diagnostic lower bound only;
 - FlatQuant W4A4 as the primary strong PTQ backend;
 - QuaRot W4A4KV4 as a rotation-based transfer backend;
@@ -147,6 +167,8 @@ Report weight bits, activation peak and KV bytes/token separately.
 - local rescue transfers to static free-generation gains;
 - the NuminaMath precision map transfers to MATH-500 and AIME;
 - Top-10% split Jaccard is at least 0.4.
+- first-order damage scores predict exact patch rescue better than matched
+  random projections on held-out problems.
 
 ## Statistics
 
@@ -160,6 +182,7 @@ Report weight bits, activation peak and KV bytes/token separately.
 - require at least 4 paired seeds before a per-trace frontier can be labeled
   trustworthy;
 - bootstrap resampling at the problem level;
+- average repeated traces/seeds inside a problem before module inference;
 - AIME seeds are aggregated within problem before resampling;
 - report 95% confidence intervals;
 - report accuracy, gap recovery, output tokens, token inflation, truncation,
@@ -174,3 +197,6 @@ calibrated probability.
 
 Fake quantization validates causal and accuracy claims only. End-to-end memory
 and latency claims require a real packed mixed W4/W8 backend.
+
+Exact layer-number transfer is not a primary claim. Cross-architecture
+analysis uses normalized depth, attention/MLP family and projection type.

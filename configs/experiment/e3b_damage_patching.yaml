@@ -1,0 +1,29 @@
+includes:
+  - ../model/ds_r1_qwen_1_5b.yaml
+  - ../data/numinamath_profile.yaml
+experiment:
+  name: e3b_frontier_damage_patching
+  split: profile
+  cohort:
+    bf16_min_success: 0.75
+    quant_max_success: 0.50
+    minimum_problems: 20
+  operating_points:
+    discovery: w4a8kv16
+    required_controls: [bf16, w4a16kv16, w8a8kv16]
+  attribution:
+    frontier_field: recovery_frontier_step
+    target_scope: window
+    max_window_tokens: 128
+    exact_top_k: 5
+    exact_random_k: 5
+    estimator: compression_delta_identity_ste
+  stability:
+    top_k: 10
+    depth_bins: 4
+    bootstrap_samples: 5000
+    minimum_problems: 20
+  validation:
+    exact_activation_patch: true
+    prompt_only_selective_rescue: true
+    matched_random_projection: true
