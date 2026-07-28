@@ -27,3 +27,12 @@ def test_adapter_describes_wrapped_and_unwrapped_models():
     assert [(item.name, item.parameter_count) for item in before] == [
         (item.name, item.parameter_count) for item in after
     ]
+
+
+def test_adapter_exposes_single_layer_family_groups():
+    model = TinyTransformer()
+    groups = ModelAdapter("tiny").group_names(model)
+
+    assert groups["layer_0.attention"] == ["layers.0.q_proj"]
+    assert groups["layer_0.mlp"] == ["layers.0.down_proj"]
+    assert groups["layer_1"] == ["layers.1.down_proj", "layers.1.q_proj"]

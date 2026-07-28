@@ -123,6 +123,41 @@ python scripts/03d_rejudge_counterfactual.py \
   --output artifacts/frontiers/w4a8_v031_rejudged.jsonl
 ```
 
+Version 0.3.2 closes the pilot causal loop with prompt-only selective-rescue
+generation. Candidate layers are raised from W4 to W8 while A8 and KV16 remain
+fixed, and deterministic equal-layer-budget random maps provide the required
+control:
+
+```bash
+python scripts/04b_evaluate_selective_rescue.py \
+  --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+  --traces artifacts/traces/gsm8k_pilot1.jsonl \
+  --output artifacts/evaluation/pilot1_selective_rescue_v032.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_pilot.safetensors \
+  --rescue layer13=13 \
+  --rescue layer16=16 \
+  --rescue top2=13,16 \
+  --rescue early2=1,2 \
+  --random-budget 2 --random-maps 5 --random-seed 2026 \
+  --seeds 0 1 2 3 4 5 6 7
+```
+
+The summary reports strict EOS-aware answer accuracy, paired lift over uniform
+W4A8, recovery relative to uniform W8A8, exact selected parameter fraction and
+the mean of matched random controls. Runs checkpoint after every generation
+and resume only when the full configuration fingerprint matches.
+
+For component dissection, attribution supports
+`--grouping layer_family --include-group-regex`:
+
+```bash
+python scripts/04_run_attribution.py \
+  ... \
+  --grouping layer_family \
+  --include-group-regex '^layer_(13|16)\.'
+```
+
 To test activation balancing, calibrate on a disjoint QCal split and select the
 calibrated backend:
 

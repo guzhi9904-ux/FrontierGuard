@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import re
 from dataclasses import asdict, fields
 
 from tqdm.auto import tqdm
 
 from frontierguard.attribution.measure import (
     component_rescue_action,
-    measure_local_nll_rescue,
+    measure_local_nll_rescue_details,
 )
 from frontierguard.attribution.rescue import RescueObservation
 from frontierguard.io import read_jsonl, write_jsonl
@@ -43,10 +44,14 @@ def main() -> None:
     parser.add_argument("--group-size", type=int, default=128)
     parser.add_argument(
         "--grouping",
-        choices=["module", "projection", "layer", "block"],
+        choices=["module", "projection", "layer", "layer_family", "block"],
         default="block",
     )
     parser.add_argument("--layers-per-block", type=int, default=4)
+    parser.add_argument(
+        "--include-group-regex",
+        help="only evaluate attribution group names matching this regex",
+    )
     parser.add_argument("--bf16-oracle", action="store_true")
     parser.add_argument(
         "--rescue-component",
@@ -104,7 +109,13 @@ def main() -> None:
         groups = {
             name: modules
             for name, modules in adapter.group_names(runner.model).items()
-            if name.startswith("layer_")
+            if name.startswith("layer_") and "." not in name
+        }
+    elif args.grouping == "layer_family":
+        groups = {
+            name: modules
+            for name, modules in adapter.group_names(runner.model).items()
+            if name.startswith("layer_") and "." in name
         }
     else:
         groups = {
@@ -114,6 +125,13 @@ def main() -> None:
             ).items()
             if name.startswith("block_")
         }
+    if args.include_group_regex:
+        pattern = re.compile(args.include_group_regex)
+        groups = {
+            name: modules for name, modules in groups.items() if pattern.search(name)
+        }
+    if not groups:
+        raise ValueError("attribution grouping/filter selected no modules")
     controller = instrument_reference_backend(
         runner.model,
         PrecisionMap(default=low),
@@ -156,7 +174,7 @@ def main() -> None:
         start = target_spans[start_step][0]
         end = target_spans[end_step][1]
         for group_name, module_names in groups.items():
-            rescue = measure_local_nll_rescue(
+            measurement = measure_local_nll_rescue_details(
                 runner.model,
                 controller,
                 input_ids,
@@ -172,9 +190,9 @@ def main() -> None:
                     trace_id=f"{trace.problem_id}:{trace.seed}",
                     step_index=selected_step,
                     module_name=group_name,
-                    local_rescue=rescue,
-                    outcome_rescue=0.0,
-                    frontier_confidence=1.0,
+                    local_rescue=measurement.local_rescue,
+                    outcome_rescue=None,
+                    frontier_confidence=frontier.get("confidence"),
                     metadata={
                         "quantization": controller.metadata(),
                         "low_action": asdict(low),
@@ -188,6 +206,9 @@ def main() -> None:
                         "source_recovery_trustworthy": bool(
                             frontier.get("recovery_trustworthy", False)
                         ),
+                        "baseline_nll": measurement.baseline_nll,
+                        "rescued_nll": measurement.rescued_nll,
+                        "outcome_rescue_measured": False,
                     },
                 )
             )
@@ -196,7 +217,7 @@ def main() -> None:
             progress.set_postfix(
                 problem=trace.problem_id,
                 group=group_name,
-                rescue=f"{rescue:.4f}",
+                rescue=f"{measurement.local_rescue:.4f}",
                 refresh=True,
             )
     progress.close()

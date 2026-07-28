@@ -163,6 +163,24 @@ W8A16, not W8A8: untouched components always preserve their baseline
 precision. Select the raised component explicitly with
 `--rescue-component weight|activation|weight_activation`.
 
+Attribution is candidate generation rather than the paper endpoint.
+`04b_evaluate_selective_rescue.py` tests candidate precision maps by generating
+from the original prompt. It pairs every condition on the same problem/seed,
+uses strict EOS-aware correctness, compares against deterministic random maps
+with the same layer budget, and reports
+
+```text
+(candidate accuracy - uniform-low accuracy)
+------------------------------------------------
+(uniform-high accuracy - uniform-low accuracy)
+```
+
+as the recovery ratio. Missing outcome rescue in local attribution is stored
+as JSON `null`, not a misleading zero. Local attribution additionally stores
+baseline and rescued NLL separately. Use `layer_family` grouping plus
+`--include-group-regex` to split shortlisted layers before projection-level
+scans.
+
 ## Known v0.1 limitations
 
 - Dynamic per-layer KV precision is not yet wired into generation; the
