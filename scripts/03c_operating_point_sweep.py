@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import json
 import statistics
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
@@ -17,16 +18,17 @@ from frontierguard.io import read_jsonl, write_json, write_jsonl
 from frontierguard.models.hf_runner import HFRunner, SamplingConfig
 from frontierguard.quant.factory import REFERENCE_BACKENDS, instrument_reference_backend
 from frontierguard.schemas import PrecisionAction, PrecisionMap
-from frontierguard.traces.verify import extract_final_answer, verify_math_answer
+from frontierguard.traces.verify import classify_generation, extract_answer_details
 
 
 DEFAULT_CONDITIONS = (
     "bf16:16:16:16",
+    "w8a16kv16:8:16:16",
+    "w8a8kv16:8:8:16",
+    "w8a4kv16:8:4:16",
     "w4a16kv16:4:16:16",
     "w4a8kv16:4:8:16",
     "w4a4kv16:4:4:16",
-    "w4a4kv8:4:4:8",
-    "w4a4kv4:4:4:4",
 )
 
 
@@ -61,9 +63,13 @@ def _unique_correct_traces(path: str, limit: int | None) -> list[dict]:
 def _status(
     accuracy: float,
     *,
+    trials: int,
     minimum: float,
     maximum: float,
+    min_trials: int,
 ) -> str:
+    if trials < min_trials:
+        return "insufficient_evidence"
     if accuracy < minimum:
         return "degenerate_fail"
     if accuracy > maximum:
@@ -86,12 +92,20 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=1024)
     parser.add_argument("--candidate-min-accuracy", type=float, default=0.2)
     parser.add_argument("--candidate-max-accuracy", type=float, default=0.8)
+    parser.add_argument(
+        "--min-status-trials",
+        type=int,
+        default=5,
+        help="minimum generations before assigning candidate/degenerate labels",
+    )
     parser.add_argument("--conditions", nargs="+", default=list(DEFAULT_CONDITIONS))
     parser.add_argument("--no-progress", action="store_true")
     args = parser.parse_args()
 
     if not 0.0 <= args.candidate_min_accuracy < args.candidate_max_accuracy <= 1.0:
         raise ValueError("candidate accuracy bounds must satisfy 0 <= min < max <= 1")
+    if args.min_status_trials <= 0:
+        raise ValueError("--min-status-trials must be positive")
     traces = _unique_correct_traces(args.traces, args.limit)
     if not traces:
         raise RuntimeError("trace input contains no verified BF16-correct problems")
@@ -161,11 +175,15 @@ def main() -> None:
                             )
                         finally:
                             token_progress.close()
-                        extracted = extract_final_answer(generated["text"])
-                        correct = verify_math_answer(
-                            extracted,
+                        extraction = extract_answer_details(generated["text"])
+                        classification = classify_generation(
+                            generated["text"],
+                            extraction,
                             str(trace["reference_answer"]),
+                            truncated=generated["truncated"],
                         )
+                        extracted = extraction.answer
+                        correct = bool(classification["correct"])
                         records.append(
                             {
                                 "frontierguard_version": __version__,
@@ -176,6 +194,8 @@ def main() -> None:
                                 "correct": correct,
                                 "output": generated["text"],
                                 "extracted_answer": extracted,
+                                "extraction": extraction.to_dict(),
+                                "failure": classification,
                                 "output_tokens": generated["output_tokens"],
                                 "truncated": generated["truncated"],
                                 "latency_seconds": generated["latency_seconds"],
@@ -205,6 +225,9 @@ def main() -> None:
         trials = len(items)
         accuracy = successes / trials
         lower, upper = binomial_wilson(successes, trials)
+        failure_types = Counter(
+            item["failure"]["failure_type"] for item in items
+        )
         summaries[condition_name] = {
             "problems": len({item["problem_id"] for item in items}),
             "trials": trials,
@@ -215,6 +238,10 @@ def main() -> None:
             "mean_output_tokens": statistics.fmean(
                 item["output_tokens"] for item in items
             ),
+            "mean_repetition_fraction": statistics.fmean(
+                item["failure"]["repetition_fraction"] for item in items
+            ),
+            "failure_types": dict(sorted(failure_types.items())),
             "status": (
                 "bf16_control"
                 if (
@@ -224,8 +251,10 @@ def main() -> None:
                 )
                 else _status(
                     accuracy,
+                    trials=trials,
                     minimum=args.candidate_min_accuracy,
                     maximum=args.candidate_max_accuracy,
+                    min_trials=args.min_status_trials,
                 )
             ),
         }
@@ -241,6 +270,7 @@ def main() -> None:
             args.candidate_min_accuracy,
             args.candidate_max_accuracy,
         ],
+        "min_status_trials": args.min_status_trials,
         "conditions": summaries,
     }
     summary_path = args.summary_output or f"{args.output}.summary.json"

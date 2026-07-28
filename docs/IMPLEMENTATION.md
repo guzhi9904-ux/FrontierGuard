@@ -77,6 +77,11 @@ Recommended first run:
 ```bash
 python scripts/00_audit_env.py
 python -m frontierguard smoke-quant
+python scripts/01_prepare_data.py \
+  --input data/raw/profile_candidates.jsonl \
+  --output artifacts/manifests/pilot.json \
+  --output-dir data/splits/pilot \
+  --qcal 32 --profile 20 --validation 20
 python scripts/02_generate_traces.py \
   --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
   --input data/raw/profile_candidates.jsonl \
@@ -113,8 +118,8 @@ python scripts/03b_counterfactual_frontiers.py \
   --min-trustworthy-seeds 4
 ```
 
-Counterfactual rollout should first be run on the 3–5 shortlisted steps per
-trace. The high-level implementation is in `frontierguard.workflows`.
+Counterfactual rollout orchestration is implemented in
+`frontierguard.workflows`.
 The command displays separate teacher-forcing, total-rollout and current-token
 progress bars. Each completed trace is checkpointed to the output JSONL, so a
 later interruption does not discard earlier traces. During cached decoding,
@@ -129,10 +134,34 @@ difference-in-differences bootstrap interval. Runs with fewer than
 `--min-trustworthy-seeds` remain valid smoke tests but cannot emit a
 trustworthy frontier.
 
+Version 0.3.1 evaluates every eligible step for short traces
+(`--exhaustive-step-threshold 16`). Longer traces screen with JSD, margin and
+NLL, then add neighboring steps. This supersedes the older fixed-size
+shortlist recommendation above.
+
+Answer extraction records boxed, GSM-style, explicit-final and numeric
+fallback candidates. Markdown prose such as `Billy helps **240 people**` is
+normalized to `240`. Every rollout records the selected extraction method,
+all candidates, failure type, repetition fraction and whether EOS was
+reached. Use the offline re-judge command after parser changes:
+
+```bash
+python scripts/03d_rejudge_counterfactual.py \
+  --input artifacts/frontiers/old.jsonl \
+  --traces artifacts/traces/profile.jsonl \
+  --output artifacts/frontiers/rejudged.jsonl
+```
+
 The default teacher-forced scan evaluates one step window at a time. It keeps
 exact target NLL and margin but computes JSD on an FP Top-32 plus tail
-partition. This avoids retaining two full `sequence × vocabulary` tensors.
+partition. This avoids retaining two full `sequence x vocabulary` tensors.
 Use `scan_trace(..., low_memory=False)` only for short-sequence validation.
+
+Module attribution consumes `recovery_frontier_step` by default and can target
+the full window with `--target-scope window`. A weight rescue from W4A16 is
+W8A16, not W8A8: untouched components always preserve their baseline
+precision. Select the raised component explicitly with
+`--rescue-component weight|activation|weight_activation`.
 
 ## Known v0.1 limitations
 

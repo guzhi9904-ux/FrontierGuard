@@ -35,7 +35,7 @@ The quantization-specific bypass gain is:
 B_s=G_s^Q-G_s^F.
 \]
 
-A trustworthy frontier is the earliest step jointly supported by:
+A trustworthy legacy detector frontier is the earliest step jointly supported by:
 
 - teacher-forced Jensen-Shannon divergence;
 - target-token margin drop;
@@ -46,8 +46,25 @@ reasoning models, content after `</think>` is retained for final-answer
 verification but classified as presentation. Pure headings, answer labels and
 markup transitions are never reasoning-frontier candidates.
 
+Version 0.3.1 reports three non-interchangeable locations:
+
+- `first_error_step`: the earliest teacher-forced NLL-onset candidate;
+- `causal_first_error_step`: the earliest positive quantization-specific
+  paired prefix gain;
+- `recovery_frontier_step`: the largest positive paired prefix gain.
+
+`frontier_window` is the inclusive span covering these diagnostics. The
+teacher-forced location is a screening candidate rather than a calibrated
+hypothesis test. A recovery frontier is trustworthy only when its paired
+confidence lower bound is positive.
+
+For at most 16 eligible reasoning steps, every adjacent prefix is evaluated.
+Longer traces use the union of JSD/margin and NLL candidates, expanded to
+neighboring steps. This prevents a behaviorally important step from being
+silently removed by one teacher-forced ranking signal.
+
 More verified prefix normally improves success, so the experiment does not
-define a frontier as “failure probability rising with prefix length.”
+define a frontier as "failure probability rising with prefix length."
 
 ## Causal intervention
 
@@ -136,6 +153,10 @@ Report weight bits, activation peak and KV bytes/token separately.
 - paired seeds across conditions;
 - store each paired seed transition, continuation, extracted answer and
   truncation flag rather than only aggregated success counts;
+- store answer-extraction method, all answer candidates, repetition score and
+  failure type for every rollout;
+- require EOS for strict rollout success; a correct number inside a truncated
+  continuation is retained as diagnostic `answer_correct` evidence only;
 - require at least 4 paired seeds before a per-trace frontier can be labeled
   trustworthy;
 - bootstrap resampling at the problem level;

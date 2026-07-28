@@ -47,4 +47,32 @@ def test_generate_reports_token_progress():
     )
 
     assert result["output_tokens"] == 3
+    assert result["truncated"]
+    assert not result["eos_reached"]
     assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
+class EosAtLimitModel(TinyGenerationModel):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def forward(self, input_ids, past_key_values=None, use_cache=True):
+        output = super().forward(input_ids, past_key_values, use_cache)
+        self.calls += 1
+        if self.calls == 3:
+            output.logits[..., 0] = 0.0
+            output.logits[..., 2] = 2.0
+        return output
+
+
+def test_eos_on_last_allowed_token_is_not_reported_as_truncation():
+    runner = HFRunner(EosAtLimitModel(), TinyTokenizer())
+    result = runner.generate(
+        torch.tensor([[1]]),
+        SamplingConfig(temperature=0.0, max_new_tokens=3),
+    )
+
+    assert result["output_tokens"] == 3
+    assert result["eos_reached"]
+    assert not result["truncated"]

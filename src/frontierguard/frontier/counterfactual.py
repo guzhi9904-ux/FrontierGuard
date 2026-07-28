@@ -17,6 +17,13 @@ class SeedOutcome:
     output_tokens: int = 0
     truncated: bool = False
     latency_seconds: float | None = None
+    extraction_method: str | None = None
+    answer_candidates: tuple[dict, ...] = ()
+    answer_candidate_count: int = 0
+    answer_candidates_truncated: bool = False
+    failure_type: str = "unknown"
+    repetition_fraction: float = 0.0
+    eos_reached: bool = True
 
 
 @dataclass(frozen=True)

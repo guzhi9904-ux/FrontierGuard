@@ -26,7 +26,7 @@ verified BF16 traces
 
 ## Status
 
-Version 0.3.0 implements:
+Version 0.3.1 implements:
 
 - symmetric/asymmetric groupwise fake quantization;
 - calibrated SmoothQuant-style per-linear activation balancing;
@@ -35,6 +35,11 @@ Version 0.3.0 implements:
 - incremental KV-cache fake quantization during autoregressive decoding;
 - phase-aware reasoning/presentation segmentation and structural-step filtering;
 - raw per-seed counterfactual continuations and paired bootstrap intervals;
+- Markdown/LaTeX-aware answer extraction with auditable candidate provenance;
+- offline re-judging of saved continuations without another model run;
+- exhaustive short-CoT prefix evaluation and multi-signal long-CoT candidates;
+- separate first-error, recovery-frontier and frontier-window diagnostics;
+- rollout failure taxonomy for wrong answers, repetition and truncation;
 - precision-map-controlled module interventions;
 - reasoning-step segmentation and trace schemas;
 - JSD, margin, NLL, bypass-gain and frontier detection;
@@ -75,6 +80,17 @@ python scripts/03a_precision_sweep.py \
   --limit 1
 ```
 
+Create deterministic, disjoint pilot splits and materialize runnable JSONL
+files:
+
+```bash
+python scripts/01_prepare_data.py \
+  --input data/raw/gsm8k_candidates.jsonl \
+  --output artifacts/manifests/gsm8k_pilot.json \
+  --output-dir data/splits/gsm8k_pilot \
+  --qcal 32 --profile 20 --validation 20
+```
+
 Screen prompt-only operating points before launching prefix rollouts:
 
 ```bash
@@ -91,6 +107,21 @@ Counterfactual runs show model setup, teacher-forcing window, rollout and
 per-token progress with elapsed time and ETA. Completed traces are
 checkpointed to the requested JSONL output. Pass `--no-progress` only for
 non-interactive jobs that do not need progress bars.
+
+Traces with at most 16 eligible reasoning steps evaluate every adjacent
+prefix by default. Longer traces use JSD, margin and NLL candidates plus their
+neighbors. Output filenames that contain a `wXaYkvZ` label are checked against
+the actual action to prevent mislabeled experiments.
+
+Saved v0.3.0 counterfactual outputs can be re-judged after parser updates
+without loading the model:
+
+```bash
+python scripts/03d_rejudge_counterfactual.py \
+  --input artifacts/frontiers/w4a8_v030.jsonl \
+  --traces artifacts/traces/profile.jsonl \
+  --output artifacts/frontiers/w4a8_v031_rejudged.jsonl
+```
 
 To test activation balancing, calibrate on a disjoint QCal split and select the
 calibrated backend:

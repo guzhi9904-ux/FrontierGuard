@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 
@@ -34,6 +34,19 @@ def main() -> None:
             "pass_at_1_estimate": float(problem_scores.mean()),
             "mean_output_tokens": float(np.mean([row["output_tokens"] for row in rows])),
             "truncation_rate": float(np.mean([row["truncated"] for row in rows])),
+            "failure_types": dict(
+                sorted(
+                    Counter(
+                        row.get("metadata", {})
+                        .get("failure", {})
+                        .get(
+                            "failure_type",
+                            "none" if row["correct"] else "unclassified",
+                        )
+                        for row in rows
+                    ).items()
+                )
+            ),
         }
     print(json.dumps(summary, indent=2, sort_keys=True))
 

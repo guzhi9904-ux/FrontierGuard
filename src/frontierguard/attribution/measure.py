@@ -11,6 +11,41 @@ from frontierguard.quant.controller import QuantizationController
 from frontierguard.schemas import PrecisionAction
 
 
+def component_rescue_action(
+    low: PrecisionAction,
+    *,
+    high_bits: int,
+    component: str,
+) -> PrecisionAction:
+    """Raise selected linear components without lowering untouched precision."""
+
+    if component not in {"weight", "activation", "weight_activation"}:
+        raise ValueError(f"unsupported rescue component: {component}")
+    action = PrecisionAction(
+        weight_bits=(
+            max(low.weight_bits, high_bits)
+            if component in {"weight", "weight_activation"}
+            else low.weight_bits
+        ),
+        activation_bits=(
+            max(low.activation_bits, high_bits)
+            if component in {"activation", "weight_activation"}
+            else low.activation_bits
+        ),
+        kv_bits=low.kv_bits,
+        weight_group_size=low.weight_group_size,
+        kv_group_size=low.kv_group_size,
+        symmetric_weight=low.symmetric_weight,
+        symmetric_activation=low.symmetric_activation,
+        symmetric_kv=low.symmetric_kv,
+        enabled=low.enabled,
+    )
+    action.validate()
+    if action == low:
+        raise ValueError("selected rescue component does not increase precision")
+    return action
+
+
 def sequence_nll(logits: torch.Tensor, targets: torch.Tensor) -> float:
     value = F.cross_entropy(
         logits.float().reshape(-1, logits.shape[-1]),

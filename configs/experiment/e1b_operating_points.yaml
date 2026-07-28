@@ -5,13 +5,15 @@ experiment:
   verified_problem_limit: 5
   seeds: [0]
   candidate_accuracy_range: [0.2, 0.8]
+  min_status_trials: 5
   conditions:
     - {name: bf16, weight_bits: 16, activation_bits: 16, kv_bits: 16}
+    - {name: w8a16kv16, weight_bits: 8, activation_bits: 16, kv_bits: 16}
+    - {name: w8a8kv16, weight_bits: 8, activation_bits: 8, kv_bits: 16}
+    - {name: w8a4kv16, weight_bits: 8, activation_bits: 4, kv_bits: 16}
     - {name: w4a16kv16, weight_bits: 4, activation_bits: 16, kv_bits: 16}
     - {name: w4a8kv16, weight_bits: 4, activation_bits: 8, kv_bits: 16}
     - {name: w4a4kv16, weight_bits: 4, activation_bits: 4, kv_bits: 16}
-    - {name: w4a4kv8, weight_bits: 4, activation_bits: 4, kv_bits: 8}
-    - {name: w4a4kv4, weight_bits: 4, activation_bits: 4, kv_bits: 4}
   guardrails:
     max_truncation_fraction: 0.02
     require_verified_bf16_input: true

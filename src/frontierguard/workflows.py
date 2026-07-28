@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
@@ -25,7 +26,7 @@ from frontierguard.frontier.pipeline import (
 from frontierguard.models.hf_runner import HFRunner, SamplingConfig
 from frontierguard.schemas import TraceRecord
 from frontierguard.traces.segment import segment_reasoning
-from frontierguard.traces.verify import extract_final_answer, verify_math_answer
+from frontierguard.traces.verify import classify_generation, extract_answer_details
 
 
 WorkflowProgressCallback = Callable[[str, dict[str, Any]], None]
@@ -68,6 +69,8 @@ def scan_trace(
     *,
     detector: FrontierDetector | None = None,
     shortlist_size: int = 5,
+    exhaustive_step_threshold: int = 16,
+    candidate_neighbor_radius: int = 1,
     low_memory: bool = True,
     progress_callback: ScanProgressCallback | None = None,
 ) -> TeacherForcedScan:
@@ -85,6 +88,8 @@ def scan_trace(
         spans,
         detector=detector,
         shortlist_size=shortlist_size,
+        exhaustive_step_threshold=exhaustive_step_threshold,
+        candidate_neighbor_radius=candidate_neighbor_radius,
         progress_callback=progress_callback,
     )
     scan.shortlist = [eligible_indices[index] for index in scan.shortlist]
@@ -189,11 +194,15 @@ def counterfactual_trace(
                         ),
                     )
                     full_output = response_prefix + generated["text"]
-                    extracted_answer = extract_final_answer(full_output)
-                    success = verify_math_answer(
-                        extracted_answer,
+                    extraction = extract_answer_details(full_output)
+                    classification = classify_generation(
+                        full_output,
+                        extraction,
                         trace.reference_answer,
+                        truncated=generated["truncated"],
                     )
+                    extracted_answer = extraction.answer
+                    success = bool(classification["correct"])
                     if progress_callback is not None:
                         progress_callback(
                             "rollout_end",
@@ -204,6 +213,8 @@ def counterfactual_trace(
                                 "latency_seconds": generated["latency_seconds"],
                                 "success": success,
                                 "extracted_answer": extracted_answer,
+                                "extraction_method": extraction.method,
+                                "failure_type": classification["failure_type"],
                             },
                         )
                     seed_outcomes.append(
@@ -215,6 +226,19 @@ def counterfactual_trace(
                             output_tokens=generated["output_tokens"],
                             truncated=generated["truncated"],
                             latency_seconds=generated["latency_seconds"],
+                            extraction_method=extraction.method,
+                            answer_candidates=tuple(
+                                extraction.to_dict()["candidates"]
+                            ),
+                            answer_candidate_count=extraction.candidate_count,
+                            answer_candidates_truncated=(
+                                extraction.candidates_truncated
+                            ),
+                            failure_type=classification["failure_type"],
+                            repetition_fraction=classification[
+                                "repetition_fraction"
+                            ],
+                            eos_reached=classification["eos_reached"],
                         )
                     )
                 outcomes.append(
@@ -272,6 +296,23 @@ def counterfactual_trace(
         detection_ci_lower.append(effect.lower if eligible else 0.0)
         statistically_eligible.append(eligible)
         paired_effects.append(asdict(effect))
+
+    def summarize(outcomes: list[PrefixOutcome]) -> dict[str, Any]:
+        items = [item for outcome in outcomes for item in outcome.outcomes]
+        failures = Counter(item.failure_type for item in items)
+        return {
+            "rollouts": len(items),
+            "successes": sum(item.success for item in items),
+            "truncated": sum(item.truncated for item in items),
+            "eos_reached": sum(item.eos_reached for item in items),
+            "failure_types": dict(sorted(failures.items())),
+            "mean_repetition_fraction": (
+                sum(item.repetition_fraction for item in items) / len(items)
+                if items
+                else 0.0
+            ),
+        }
+
     return {
         "prefix_indices": prefix_indices,
         "gain_step_indices": gain_step_indices,
@@ -285,6 +326,10 @@ def counterfactual_trace(
         "detection_ci_lower": detection_ci_lower,
         "statistically_eligible": statistically_eligible,
         "paired_effects": paired_effects,
+        "condition_summaries": {
+            "bf16": summarize(fp_outcomes),
+            "quantized": summarize(quant_outcomes),
+        },
         "confidence_level": confidence_level,
         "bootstrap_samples": bootstrap_samples,
         "min_trustworthy_seeds": min_trustworthy_seeds,
@@ -340,6 +385,58 @@ def complete_frontier(
         if result.step_index is not None
         else None
     )
+    nll_values = torch.tensor(scan.step_nll_gap, dtype=torch.float64)
+    nll_median = float(nll_values.median().item()) if nll_values.numel() else 0.0
+    teacher_candidates = [
+        step_index
+        for step_index, nll in zip(scan.step_indices, scan.step_nll_gap)
+        if nll > 0.0 and nll >= nll_median
+    ]
+    teacher_first_error = teacher_candidates[0] if teacher_candidates else None
+    positive_causal = [
+        step_index
+        for step_index, gain in zip(
+            counterfactual["gain_step_indices"],
+            counterfactual["specific_gain"],
+        )
+        if gain > 0.0
+    ]
+    causal_first_error = positive_causal[0] if positive_causal else None
+    recovery_step = None
+    recovery_gain = 0.0
+    recovery_lower = 0.0
+    recovery_upper = 0.0
+    recovery_trustworthy = False
+    if positive_causal:
+        recovery_step = max(
+            positive_causal,
+            key=lambda step_index: gain_by_step[step_index],
+        )
+        recovery_gain = float(gain_by_step[recovery_step])
+        recovery_lower = float(lower_by_step[recovery_step])
+        recovery_upper = float(upper_by_step[recovery_step])
+        eligible_by_step = dict(
+            zip(
+                counterfactual["gain_step_indices"],
+                counterfactual.get(
+                    "statistically_eligible",
+                    [False] * len(counterfactual["gain_step_indices"]),
+                ),
+            )
+        )
+        recovery_trustworthy = bool(
+            eligible_by_step.get(recovery_step, False) and recovery_lower > 0.0
+        )
+    window_points = (
+        [
+            value
+            for value in (teacher_first_error, causal_first_error, recovery_step)
+            if value is not None
+        ]
+        if recovery_step is not None
+        else []
+    )
+    frontier_window = [min(window_points), max(window_points)] if window_points else None
     return {
         "step_index": selected_step,
         "trustworthy": result.trustworthy,
@@ -360,4 +457,30 @@ def complete_frontier(
         "bypass_ci_lower": bypass_ci_lower,
         "bypass_ci_upper": bypass_ci_upper,
         "combined_score": result.combined_score,
+        "first_error_step": teacher_first_error,
+        "causal_first_error_step": causal_first_error,
+        "recovery_frontier_step": recovery_step,
+        "frontier_window": frontier_window,
+        "recovery_gain": recovery_gain,
+        "recovery_ci_lower": recovery_lower,
+        "recovery_ci_upper": recovery_upper,
+        "recovery_trustworthy": recovery_trustworthy,
+        "frontier_definitions": {
+            "first_error_step": (
+                "earliest eligible step with positive NLL gap at or above "
+                "the per-trace median; diagnostic candidate, not a hypothesis test"
+            ),
+            "causal_first_error_step": (
+                "earliest evaluated step with positive paired "
+                "quantization-specific prefix gain"
+            ),
+            "recovery_frontier_step": (
+                "evaluated step with maximum positive paired "
+                "quantization-specific prefix gain"
+            ),
+            "frontier_window": (
+                "inclusive span covering teacher-forced onset, earliest causal "
+                "recovery and maximum recovery"
+            ),
+        },
     }
