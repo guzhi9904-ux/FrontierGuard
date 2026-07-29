@@ -1,9 +1,13 @@
 import pytest
 
 from frontierguard.evaluation.selective import (
+    ModuleRescueSpec,
+    build_module_precision_map,
     build_precision_map,
+    matched_random_module_specs,
     paired_success_lift,
     parse_rescue_spec,
+    rank_damage_modules,
     random_layer_specs,
     select_module_names,
     summarize_generation_condition,
@@ -64,6 +68,65 @@ def test_precision_budget_is_parameter_weighted():
     assert metadata["instrumented_parameter_count"] == 200
     assert metadata["high_precision_parameter_fraction"] == pytest.approx(0.3)
     assert metadata["effective_weight_bits"] == pytest.approx(5.2)
+
+
+def test_exact_module_precision_map_and_damage_ranking():
+    low = PrecisionAction(4, 8, 16)
+    high = PrecisionAction(8, 8, 16)
+    scores = []
+    for problem_id, values in {
+        "p1": {"layers.0.q_proj": 2.0, "layers.1.q_proj": 1.0},
+        "p2": {"layers.0.q_proj": 1.0, "layers.1.q_proj": -1.0},
+    }.items():
+        for module_name, value in values.items():
+            scores.append(
+                {
+                    "problem_id": problem_id,
+                    "module_name": module_name,
+                    "predicted_nll_rescue": value,
+                }
+            )
+
+    ranking = rank_damage_modules(
+        scores,
+        DESCRIPTORS,
+        minimum_problem_fraction=1.0,
+        minimum_positive_fraction=0.5,
+        bootstrap_samples=100,
+        seed=3,
+    )
+    assert [item["key"] for item in ranking] == ["layers.0.q_proj"]
+    precision_map, metadata = build_module_precision_map(
+        DESCRIPTORS,
+        ModuleRescueSpec(
+            "ranked_top1",
+            ("layers.0.q_proj",),
+            {"selection_method": "test"},
+        ),
+        low=low,
+        high=high,
+    )
+    assert precision_map.action_for("layers.0.q_proj") == high
+    assert precision_map.action_for("layers.0.up_proj") == low
+    assert metadata["selected_module_count"] == 1
+    assert metadata["selection_method"] == "test"
+
+
+def test_matched_random_module_controls_preserve_projection_mix():
+    specs = matched_random_module_specs(
+        DESCRIPTORS,
+        ("layers.0.q_proj", "layers.0.up_proj"),
+        count=2,
+        seed=7,
+        prefix="ranked_top2",
+    )
+    by_name = {item.name: item for item in DESCRIPTORS}
+    assert len(specs) == 2
+    assert len({item.module_names for item in specs}) == 2
+    for spec in specs:
+        projections = sorted(by_name[name].projection for name in spec.module_names)
+        assert projections == ["q_proj", "up_proj"]
+        assert not set(spec.module_names) & {"layers.0.q_proj", "layers.0.up_proj"}
 
 
 def test_random_controls_are_unique_and_reproducible():

@@ -240,6 +240,29 @@ labels fewer than 20 problems as pilot-only evidence. Selected projections
 must still pass `04b_evaluate_selective_rescue.py` from the original prompt;
 activation patching is mechanism evidence, not final accuracy.
 
+### Damage-ranked static rescue
+
+Version 0.4.1 lets the prompt-only evaluator consume the `04c` JSONL directly.
+For each projection it first averages repeated trace seeds inside a problem,
+then ranks the problem-level means. A projection is eligible only when it
+meets both `--minimum-module-problem-fraction` and
+`--minimum-module-positive-fraction`; `--require-positive-module-ci` is
+available for larger cohorts. Cumulative `--rank-budgets` promote only the
+selected weights from W4 to W8, leaving A8 and KV16 unchanged.
+
+Random controls are sampled from the same projection types as the selected
+modules. This makes `ranked_topK` versus `ranked_topK_random_*` a comparison of
+where precision is spent, rather than a comparison with a different module
+count or attention/MLP mix. The summary stores exact selected module names,
+parameter-weighted effective bits, selection problem IDs, and overlap with the
+generation evaluation cohort.
+
+Using the same 15 problems for ranking and generation is a valid causal-loop
+pilot, but its summary is deliberately labeled `in_sample_exploratory`.
+Publication evidence requires freezing the selected module map and evaluating
+it on unseen problems, ideally on the 7B primary model and a second
+architecture using normalized-depth/projection-family transfer.
+
 ## Known v0.1 limitations
 
 - Dynamic per-layer KV precision is not yet wired into generation; the

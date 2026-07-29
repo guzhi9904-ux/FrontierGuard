@@ -194,6 +194,37 @@ The gradient score is explicitly labeled as an STE first-order estimator.
 Exact patches and final prompt-only selective-rescue generation remain
 separate validation stages.
 
+Version 0.4.1 connects those stages without manually guessing layers.
+`04b_evaluate_selective_rescue.py --damage-scores` averages damage within each
+problem, filters projections by problem coverage and positive-sign
+consistency, and builds cumulative Top-K W8 weight exceptions on the W4A8KV16
+backbone. Each Top-K map is compared with deterministic random maps matched on
+projection type and module count:
+
+```bash
+python scripts/04b_evaluate_selective_rescue.py \
+  --model "$MODEL_DIR" \
+  --traces artifacts/traces/gsm8k_clean_fail15_seed0_v040.jsonl \
+  --damage-scores artifacts/attribution/gsm8k_fail15_w4a8kv16_damage_v040.jsonl \
+  --output artifacts/evaluation/gsm8k_fail15_ranked_rescue_v041.jsonl \
+  --backend smoothquant \
+  --calibration-scales artifacts/calibration/sq_gsm8k_qcal32_v040.safetensors \
+  --weight-bits 4 --activation-bits 8 --kv-bits 16 \
+  --high-weight-bits 8 \
+  --rank-budgets 2 4 8 \
+  --ranked-random-maps 2 \
+  --minimum-module-problem-fraction 0.8 \
+  --minimum-module-positive-fraction 0.5 \
+  --random-maps 0 \
+  --seeds 0 1 2 3 \
+  --max-new-tokens 2048
+```
+
+The output explicitly labels selection/evaluation overlap as
+`in_sample_exploratory`. Re-run the frozen ranked map on new problems to obtain
+a held-out result; local NLL ranking alone is never reported as final task
+recovery.
+
 To test activation balancing, calibrate on a disjoint QCal split and select the
 calibrated backend:
 

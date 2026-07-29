@@ -13,9 +13,13 @@ from tqdm.auto import tqdm
 
 from frontierguard import __version__
 from frontierguard.evaluation.selective import (
+    ModuleRescueSpec,
+    build_module_precision_map,
     build_precision_map,
+    matched_random_module_specs,
     paired_success_lift,
     parse_rescue_spec,
+    rank_damage_modules,
     random_layer_specs,
     summarize_generation_condition,
 )
@@ -107,6 +111,7 @@ def _summary(
     bootstrap_seed: int,
     low_name: str,
     high_name: str,
+    selection_provenance: dict | None,
 ) -> dict:
     by_condition = {
         condition.name: [
@@ -166,6 +171,42 @@ def _summary(
                     value["accuracy"] - random_control["mean_accuracy"]
                 )
 
+    ranked_random_controls = {}
+    ranked_candidates = [
+        item for item in conditions if item.kind == "ranked_module_rescue"
+    ]
+    for candidate in ranked_candidates:
+        controls = [
+            summaries[item.name]
+            for item in conditions
+            if item.kind == "ranked_matched_random"
+            and item.metadata.get("matched_condition") == candidate.name
+        ]
+        if not controls:
+            continue
+        accuracies = [item["accuracy"] for item in controls]
+        control = {
+            "maps": len(controls),
+            "mean_accuracy": sum(accuracies) / len(accuracies),
+            "min_accuracy": min(accuracies),
+            "max_accuracy": max(accuracies),
+            "condition_names": [
+                item.name
+                for item in conditions
+                if item.kind == "ranked_matched_random"
+                and item.metadata.get("matched_condition") == candidate.name
+            ],
+        }
+        ranked_random_controls[candidate.name] = control
+        summaries[candidate.name]["accuracy_minus_matched_random_mean"] = (
+            summaries[candidate.name]["accuracy"] - control["mean_accuracy"]
+        )
+
+    trace_problem_ids = {str(row["problem_id"]) for row in records}
+    selection_problem_ids = set(
+        (selection_provenance or {}).get("selection_problem_ids", [])
+    )
+    overlap = sorted(trace_problem_ids & selection_problem_ids)
     return {
         "frontierguard_version": __version__,
         "run_fingerprint": run_fingerprint,
@@ -176,6 +217,8 @@ def _summary(
         "seeds": seeds,
         "conditions": summaries,
         "random_control": random_control,
+        "ranked_random_controls": ranked_random_controls,
+        "selection_provenance": selection_provenance,
         "interpretation": {
             "primary_endpoint": "strict_eos_answer_accuracy",
             "local_nll_is_primary": False,
@@ -185,6 +228,15 @@ def _summary(
             ),
             "single_problem_is_pilot_only": (
                 len({row["problem_id"] for row in records}) < 5
+            ),
+            "selection_evaluation_overlap_problems": len(overlap),
+            "selection_evaluation_overlap_ids": overlap,
+            "selection_evaluation_status": (
+                "in_sample_exploratory"
+                if overlap
+                else "held_out"
+                if selection_provenance is not None
+                else "manual_candidates"
             ),
         },
     }
@@ -212,6 +264,25 @@ def main() -> None:
             "repeat for multiple conditions"
         ),
     )
+    parser.add_argument(
+        "--damage-scores",
+        help=(
+            "04c projection-score JSONL; enables cumulative exact-module "
+            "ranked rescue conditions"
+        ),
+    )
+    parser.add_argument("--damage-score-field", default="predicted_nll_rescue")
+    parser.add_argument(
+        "--rank-budgets",
+        type=int,
+        nargs="+",
+        default=[1, 2, 4, 8],
+        help="cumulative top-module budgets used with --damage-scores",
+    )
+    parser.add_argument("--minimum-module-problem-fraction", type=float, default=0.5)
+    parser.add_argument("--minimum-module-positive-fraction", type=float, default=0.5)
+    parser.add_argument("--require-positive-module-ci", action="store_true")
+    parser.add_argument("--ranked-random-maps", type=int, default=2)
     parser.add_argument("--random-maps", type=int, default=5)
     parser.add_argument("--random-budget", type=int, default=2)
     parser.add_argument("--random-seed", type=int, default=2026)
@@ -229,6 +300,12 @@ def main() -> None:
 
     if args.random_maps < 0:
         raise ValueError("--random-maps cannot be negative")
+    if args.ranked_random_maps < 0:
+        raise ValueError("--ranked-random-maps cannot be negative")
+    if not args.rank_budgets or any(value <= 0 for value in args.rank_budgets):
+        raise ValueError("--rank-budgets must contain positive values")
+    if len(set(args.rank_budgets)) != len(args.rank_budgets):
+        raise ValueError("--rank-budgets must be unique")
     if args.bootstrap_samples <= 0:
         raise ValueError("--bootstrap-samples must be positive")
     if not args.seeds or len(set(args.seeds)) != len(args.seeds):
@@ -265,20 +342,99 @@ def main() -> None:
     total_parameters = sum(item.parameter_count for item in descriptors)
 
     requested_specs = [
-        parse_rescue_spec(value) for value in (args.rescue or DEFAULT_RESCUES)
+        parse_rescue_spec(value)
+        for value in (
+            args.rescue
+            if args.rescue is not None
+            else ()
+            if args.damage_scores
+            else DEFAULT_RESCUES
+        )
     ]
+    legacy_random_maps = args.random_maps if requested_specs else 0
     random_specs = random_layer_specs(
         (item.layer_index for item in descriptors),
         budget=args.random_budget,
-        count=args.random_maps,
+        count=legacy_random_maps,
         seed=args.random_seed,
     )
+    ranked_specs: list[ModuleRescueSpec] = []
+    ranked_random_specs: list[ModuleRescueSpec] = []
+    selection_provenance = None
+    if args.damage_scores:
+        damage_rows = list(read_jsonl(args.damage_scores))
+        ranking = rank_damage_modules(
+            damage_rows,
+            descriptors,
+            score_field=args.damage_score_field,
+            minimum_problem_fraction=args.minimum_module_problem_fraction,
+            minimum_positive_fraction=args.minimum_module_positive_fraction,
+            require_positive_ci=args.require_positive_module_ci,
+            bootstrap_samples=args.bootstrap_samples,
+            confidence=0.95,
+            seed=args.bootstrap_seed,
+        )
+        largest_budget = max(args.rank_budgets)
+        if len(ranking) < largest_budget:
+            raise RuntimeError(
+                f"only {len(ranking)} modules pass the damage filters, "
+                f"but rank budget {largest_budget} was requested"
+            )
+        for budget in sorted(args.rank_budgets):
+            selected_ranking = ranking[:budget]
+            selected_names = tuple(item["key"] for item in selected_ranking)
+            name = f"ranked_top{budget}"
+            ranked_specs.append(
+                ModuleRescueSpec(
+                    name=name,
+                    module_names=selected_names,
+                    metadata={
+                        "selection_method": "problem_aggregated_damage_ranking",
+                        "damage_score_field": args.damage_score_field,
+                        "damage_source": str(Path(args.damage_scores).resolve()),
+                        "ranking": selected_ranking,
+                    },
+                )
+            )
+            ranked_random_specs.extend(
+                matched_random_module_specs(
+                    descriptors,
+                    selected_names,
+                    count=args.ranked_random_maps,
+                    seed=args.random_seed + budget,
+                    prefix=name,
+                )
+            )
+        selection_provenance = {
+            "damage_source": str(Path(args.damage_scores).resolve()),
+            "damage_score_field": args.damage_score_field,
+            "selection_problem_ids": sorted(
+                {str(row["problem_id"]) for row in damage_rows}
+            ),
+            "selection_problems": len(
+                {str(row["problem_id"]) for row in damage_rows}
+            ),
+            "ranked_modules_passing_filters": len(ranking),
+            "rank_budgets": sorted(args.rank_budgets),
+            "minimum_module_problem_fraction": args.minimum_module_problem_fraction,
+            "minimum_module_positive_fraction": args.minimum_module_positive_fraction,
+            "require_positive_module_ci": args.require_positive_module_ci,
+            "top_ranking": ranking[:largest_budget],
+        }
     reserved = {
         precision_label(low),
         f"{precision_label(high)}_full",
         "bf16",
     }
-    all_names = [item.name for item in requested_specs + random_specs]
+    all_names = [
+        item.name
+        for item in (
+            list(requested_specs)
+            + list(random_specs)
+            + ranked_specs
+            + ranked_random_specs
+        )
+    ]
     if len(set(all_names)) != len(all_names):
         raise ValueError("rescue condition names must be unique")
     if reserved.intersection(all_names):
@@ -328,6 +484,38 @@ def main() -> None:
                 metadata=metadata,
             )
         )
+    for spec in ranked_specs:
+        precision_map, metadata = build_module_precision_map(
+            descriptors,
+            spec,
+            low=low,
+            high=high,
+        )
+        conditions.append(
+            Condition(
+                name=spec.name,
+                kind="ranked_module_rescue",
+                precision_map=precision_map,
+                full_precision=False,
+                metadata=metadata,
+            )
+        )
+    for spec in ranked_random_specs:
+        precision_map, metadata = build_module_precision_map(
+            descriptors,
+            spec,
+            low=low,
+            high=high,
+        )
+        conditions.append(
+            Condition(
+                name=spec.name,
+                kind="ranked_matched_random",
+                precision_map=precision_map,
+                full_precision=False,
+                metadata=metadata,
+            )
+        )
     conditions.append(
         _uniform_condition(
             high_name,
@@ -364,6 +552,7 @@ def main() -> None:
         "temperature": args.temperature,
         "top_p": args.top_p,
         "conditions": [_condition_payload(item) for item in conditions],
+        "selection_provenance": selection_provenance,
     }
     run_fingerprint = stable_fingerprint(run_config)
 
@@ -533,6 +722,7 @@ def main() -> None:
         bootstrap_seed=args.bootstrap_seed,
         low_name=low_name,
         high_name=high_name,
+        selection_provenance=selection_provenance,
     )
     summary_path = args.summary_output or f"{args.output}.summary.json"
     write_json(summary_path, summary)

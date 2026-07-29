@@ -5,10 +5,13 @@ from __future__ import annotations
 import random
 import re
 import statistics
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
+import numpy as np
+
+from frontierguard.attribution.stability import aggregate_damage_rows
 from frontierguard.evaluation.statistics import (
     PairedObservation,
     binomial_wilson,
@@ -41,6 +44,15 @@ class RescueSpec:
     @property
     def label(self) -> str:
         return f"{self.name}={','.join(item.label for item in self.selectors)}"
+
+
+@dataclass(frozen=True)
+class ModuleRescueSpec:
+    """A static rescue condition defined by exact projection names."""
+
+    name: str
+    module_names: tuple[str, ...]
+    metadata: dict
 
 
 def parse_rescue_spec(value: str) -> RescueSpec:
@@ -108,6 +120,36 @@ def build_precision_map(
     """Construct a module-exact precision map and parameter-budget metadata."""
 
     names = select_module_names(descriptors, spec.selectors)
+    return build_module_precision_map(
+        descriptors,
+        ModuleRescueSpec(
+            name=spec.name,
+            module_names=names,
+            metadata={"rescue_spec": spec.label, "selection_method": "manual_layer"},
+        ),
+        low=low,
+        high=high,
+    )
+
+
+def build_module_precision_map(
+    descriptors: Sequence[ModuleDescriptor],
+    spec: ModuleRescueSpec,
+    *,
+    low: PrecisionAction,
+    high: PrecisionAction,
+) -> tuple[PrecisionMap, dict]:
+    """Construct a precision map from exact projection names."""
+
+    if not spec.name or not _NAME.fullmatch(spec.name):
+        raise ValueError(f"invalid module rescue name: {spec.name!r}")
+    names = tuple(dict.fromkeys(spec.module_names))
+    if not names:
+        raise ValueError("module rescue must select at least one projection")
+    available = {item.name for item in descriptors}
+    unknown = sorted(set(names) - available)
+    if unknown:
+        raise ValueError(f"module rescue references unavailable modules: {unknown[:3]}")
     selected = set(names)
     total_parameters = sum(item.parameter_count for item in descriptors)
     selected_parameters = sum(
@@ -127,7 +169,9 @@ def build_precision_map(
         default=low,
         modules={name: high for name in names},
         metadata={
-            "rescue_spec": spec.label,
+            **spec.metadata,
+            "rescue_name": spec.name,
+            "selected_modules": list(names),
             "selected_module_count": len(names),
             "selected_parameter_count": selected_parameters,
             "instrumented_parameter_count": total_parameters,
@@ -136,6 +180,151 @@ def build_precision_map(
         },
     )
     return precision_map, dict(precision_map.metadata)
+
+
+def rank_damage_modules(
+    rows: Sequence[dict],
+    descriptors: Sequence[ModuleDescriptor],
+    *,
+    score_field: str = "predicted_nll_rescue",
+    minimum_problem_fraction: float = 0.5,
+    minimum_positive_fraction: float = 0.5,
+    require_positive_ci: bool = False,
+    bootstrap_samples: int = 5000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> list[dict]:
+    """Rank projections by problem-level frontier damage.
+
+    Repeated trace seeds are averaged within a problem before ranking. Coverage
+    and sign-consistency filters prevent a module seen on only a few examples
+    from becoming a global precision exception.
+    """
+
+    if not rows:
+        raise ValueError("damage score input is empty")
+    if not 0 < minimum_problem_fraction <= 1:
+        raise ValueError("minimum problem fraction must lie in (0, 1]")
+    if not 0 <= minimum_positive_fraction <= 1:
+        raise ValueError("minimum positive fraction must lie in [0, 1]")
+    available = {item.name for item in descriptors}
+    observed = {str(row["module_name"]) for row in rows}
+    unknown = sorted(observed - available)
+    if unknown:
+        raise ValueError(f"damage scores reference unavailable modules: {unknown[:3]}")
+    usable = [
+        row
+        for row in rows
+        if row.get(score_field) is not None
+        and np.isfinite(float(row[score_field]))
+    ]
+    if not usable:
+        raise ValueError(f"damage scores contain no finite {score_field!r} values")
+    total_problems = len({str(row["problem_id"]) for row in usable})
+    ranking = aggregate_damage_rows(
+        usable,
+        key=lambda row: str(row["module_name"]),
+        score_field=score_field,
+        bootstrap_samples=bootstrap_samples,
+        confidence=confidence,
+        seed=seed,
+    )
+    by_name = {item.name: item for item in descriptors}
+    selected = []
+    for item in ranking:
+        coverage = item["problems"] / total_problems
+        if coverage < minimum_problem_fraction:
+            continue
+        if item["mean"] <= 0:
+            continue
+        if item["positive_fraction"] < minimum_positive_fraction:
+            continue
+        if require_positive_ci and item["ci_lower"] <= 0:
+            continue
+        descriptor = by_name[item["key"]]
+        selected.append(
+            {
+                **item,
+                "problem_coverage_fraction": coverage,
+                "score_field": score_field,
+                "family": descriptor.family,
+                "projection": descriptor.projection,
+                "layer_index": descriptor.layer_index,
+                "parameter_count": descriptor.parameter_count,
+            }
+        )
+    return selected
+
+
+def matched_random_module_specs(
+    descriptors: Sequence[ModuleDescriptor],
+    selected_names: Sequence[str],
+    *,
+    count: int,
+    seed: int,
+    prefix: str,
+) -> list[ModuleRescueSpec]:
+    """Create deterministic random controls matched on projection families."""
+
+    if count < 0:
+        raise ValueError("random module map count cannot be negative")
+    selected = tuple(dict.fromkeys(selected_names))
+    if not selected:
+        raise ValueError("matched random controls need selected modules")
+    by_name = {item.name: item for item in descriptors}
+    unknown = sorted(set(selected) - by_name.keys())
+    if unknown:
+        raise ValueError(f"selected modules are unavailable: {unknown[:3]}")
+    excluded = set(selected)
+    pools: dict[str, list[str]] = defaultdict(list)
+    family_pools: dict[str, list[str]] = defaultdict(list)
+    for item in descriptors:
+        if item.name in excluded:
+            continue
+        pools[item.projection].append(item.name)
+        family_pools[item.family].append(item.name)
+
+    rng = random.Random(seed)
+    combinations: set[tuple[str, ...]] = set()
+    attempts = 0
+    maximum_attempts = max(1000, count * 200)
+    while len(combinations) < count and attempts < maximum_attempts:
+        attempts += 1
+        chosen: list[str] = []
+        for name in selected:
+            descriptor = by_name[name]
+            candidates = [
+                candidate
+                for candidate in pools[descriptor.projection]
+                if candidate not in chosen
+            ]
+            if not candidates:
+                candidates = [
+                    candidate
+                    for candidate in family_pools[descriptor.family]
+                    if candidate not in chosen
+                ]
+            if not candidates:
+                break
+            chosen.append(rng.choice(candidates))
+        if len(chosen) == len(selected):
+            combinations.add(tuple(sorted(chosen)))
+    if len(combinations) < count:
+        raise ValueError(
+            f"could create only {len(combinations)} of {count} unique matched controls"
+        )
+    return [
+        ModuleRescueSpec(
+            name=f"{prefix}_random_{index:02d}",
+            module_names=combination,
+            metadata={
+                "selection_method": "matched_random_module",
+                "matched_condition": prefix,
+                "matched_to": list(selected),
+            },
+        )
+        for index, combination in enumerate(sorted(combinations))
+    ]
 
 
 def random_layer_specs(
