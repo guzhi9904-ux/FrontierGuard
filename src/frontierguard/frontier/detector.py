@@ -105,12 +105,35 @@ class FrontierDetector:
         jsd: list[float],
         margin_drop: list[float],
         *,
+        nll_gap: list[float] | None = None,
         top_k: int = 5,
+        exhaustive_threshold: int = 16,
+        neighbor_radius: int = 1,
     ) -> list[int]:
         if len(jsd) != len(margin_drop):
             raise ValueError("signals must have equal lengths")
+        if nll_gap is not None and len(nll_gap) != len(jsd):
+            raise ValueError("NLL signal must have the same length as JSD")
+        if top_k <= 0:
+            raise ValueError("top_k must be positive")
+        if exhaustive_threshold < 0:
+            raise ValueError("exhaustive_threshold must be non-negative")
+        if neighbor_radius < 0:
+            raise ValueError("neighbor_radius must be non-negative")
+        if len(jsd) <= exhaustive_threshold:
+            return list(range(len(jsd)))
         cheap = self.config.jsd_weight * _zscore(jsd) + self.config.margin_weight * _zscore(
             margin_drop
         )
         order = np.argsort(-cheap, kind="stable")
-        return sorted(int(index) for index in order[:top_k])
+        selected = {int(index) for index in order[:top_k]}
+        if nll_gap is not None:
+            nll_order = np.argsort(-np.asarray(nll_gap, dtype=np.float64), kind="stable")
+            selected.update(int(index) for index in nll_order[: max(1, top_k // 2)])
+        expanded = {
+            neighbor
+            for index in selected
+            for neighbor in range(index - neighbor_radius, index + neighbor_radius + 1)
+            if 0 <= neighbor < len(jsd)
+        }
+        return sorted(expanded)

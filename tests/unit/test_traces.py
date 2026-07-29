@@ -1,5 +1,10 @@
 from frontierguard.traces.segment import segment_reasoning
-from frontierguard.traces.verify import extract_final_answer, verify_math_answer
+from frontierguard.traces.verify import (
+    classify_generation,
+    extract_answer_details,
+    extract_final_answer,
+    verify_math_answer,
+)
 
 
 def test_segment_blank_lines_and_numbered_steps():
@@ -53,6 +58,52 @@ def test_solution_label_with_substantive_reasoning_is_kept_without_think_tags():
 
 def test_extract_boxed_and_verify_fraction():
     assert extract_final_answer(r"work \boxed{1/2}") == "1/2"
+    assert extract_final_answer(r"work \boxed{\frac{1}{2}}") == "1/2"
     assert verify_math_answer("1/2", "0.5")
     assert verify_math_answer("50%", "0.5")
     assert not verify_math_answer("0.6", "0.5")
+
+
+def test_extracts_numeric_answer_from_markdown_prose():
+    text = "### **Final Answer**\nBilly helps **240 people**."
+    extraction = extract_answer_details(text)
+
+    assert extraction.answer == "240"
+    assert verify_math_answer("Billy helps **240 people**", "240")
+
+
+def test_nonnumeric_answer_phrase_does_not_override_numeric_evidence():
+    text = r"\boxed{240}" + "\nThe answer is the number of people helped."
+    extraction = extract_answer_details(text)
+
+    assert extraction.answer == "240"
+    assert extraction.method == "boxed"
+
+
+def test_extraction_keeps_candidates_and_detects_parser_ambiguity():
+    text = r"Final answer: 240" + "\n" + r"\boxed{50}"
+    extraction = extract_answer_details(text)
+    result = classify_generation(text, extraction, "240", truncated=False)
+
+    assert extraction.answer == "50"
+    assert result["failure_type"] == "parser_ambiguity"
+    assert result["matching_reference_candidates"][0]["value"] == "240"
+
+
+def test_repetition_is_distinct_from_plain_truncation():
+    text = ("20% of the days " * 80).strip()
+    extraction = extract_answer_details(text)
+    result = classify_generation(text, extraction, "240", truncated=True)
+
+    assert result["failure_type"] == "repetition"
+    assert not result["eos_reached"]
+
+
+def test_correct_answer_does_not_hide_eos_failure():
+    text = (r"Final answer: \boxed{240}. " + "repeat value " * 80).strip()
+    extraction = extract_answer_details(text)
+    result = classify_generation(text, extraction, "240", truncated=True)
+
+    assert result["answer_correct"]
+    assert not result["correct"]
+    assert result["failure_type"] in {"repetition", "truncation"}

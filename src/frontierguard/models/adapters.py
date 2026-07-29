@@ -71,6 +71,9 @@ class ModelAdapter:
             groups.setdefault(f"block_{block}.{item.family}", []).append(item.name)
             groups.setdefault(f"projection.{item.projection}", []).append(item.name)
             groups.setdefault(f"layer_{item.layer_index}", []).append(item.name)
+            groups.setdefault(
+                f"layer_{item.layer_index}.{item.family}", []
+            ).append(item.name)
         return groups
 
 

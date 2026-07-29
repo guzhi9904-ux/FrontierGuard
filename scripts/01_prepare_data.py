@@ -9,7 +9,7 @@ import random
 import re
 from pathlib import Path
 
-from frontierguard.io import read_jsonl, write_json
+from frontierguard.io import read_jsonl, write_json, write_jsonl
 
 
 def normalize_problem(text: str) -> str:
@@ -25,6 +25,10 @@ def main() -> None:
     parser.add_argument("--input", required=True, help="candidate JSONL")
     parser.add_argument("--exclude", nargs="*", default=[], help="evaluation JSONL files")
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--output-dir",
+        help="optionally materialize qcal/profile/validation JSONL files here",
+    )
     parser.add_argument("--qcal", type=int, default=128)
     parser.add_argument("--profile", type=int, default=96)
     parser.add_argument("--validation", type=int, default=32)
@@ -49,6 +53,7 @@ def main() -> None:
 
     cursor = 0
     subsets = {}
+    materialized = {}
     for name, size in (
         ("qcal", args.qcal),
         ("profile", args.profile),
@@ -60,6 +65,15 @@ def main() -> None:
             {"id": row.get("id", digest), "problem_hash": digest}
             for digest, row in selected
         ]
+        materialized[name] = [
+            {
+                **row,
+                "id": row.get("id", digest),
+                "problem_hash": digest,
+                "split": name,
+            }
+            for digest, row in selected
+        ]
     manifest = {
         "source": str(Path(args.input).resolve()),
         "excluded_sources": [str(Path(path).resolve()) for path in args.exclude],
@@ -68,6 +82,11 @@ def main() -> None:
         "subsets": subsets,
     }
     write_json(args.output, manifest)
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for name, rows in materialized.items():
+            write_jsonl(output_dir / f"{name}.jsonl", rows)
     print(json.dumps({name: len(rows) for name, rows in subsets.items()}, indent=2))
 
 

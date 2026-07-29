@@ -199,6 +199,7 @@ class HFRunner:
         cache = None
         eos_ids = self.tokenizer.eos_token_id
         eos_set = {eos_ids} if isinstance(eos_ids, int) else set(eos_ids or [])
+        stopped_on_eos = False
         started = time.perf_counter()
 
         for _ in range(sampling.max_new_tokens):
@@ -224,6 +225,7 @@ class HFRunner:
             if progress_callback is not None:
                 progress_callback(len(generated), sampling.max_new_tokens)
             if token in eos_set:
+                stopped_on_eos = True
                 break
 
         elapsed = time.perf_counter() - started
@@ -232,6 +234,9 @@ class HFRunner:
             "text": text,
             "token_ids": generated,
             "output_tokens": len(generated),
-            "truncated": len(generated) == sampling.max_new_tokens,
+            "truncated": (
+                len(generated) == sampling.max_new_tokens and not stopped_on_eos
+            ),
+            "eos_reached": stopped_on_eos,
             "latency_seconds": elapsed,
         }

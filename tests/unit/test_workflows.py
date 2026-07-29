@@ -93,6 +93,10 @@ def test_counterfactual_keeps_raw_paired_seed_evidence():
     assert quant_after["successes"] == 4
     assert quant_after["outcomes"][0]["continuation"] == " Final answer: 2"
     assert result["paired_effects"][0]["seed_effects"][0]["specific_delta"] == 1
+    assert result["condition_summaries"]["quantized"]["failure_types"] == {
+        "none": 4,
+        "wrong_answer": 4,
+    }
 
 
 def test_complete_frontier_maps_filtered_position_to_original_step_index():
@@ -112,9 +116,38 @@ def test_complete_frontier_maps_filtered_position_to_original_step_index():
             "bypass_ci_lower": [1.0],
             "bypass_ci_upper": [1.0],
             "detection_ci_lower": [1.0],
+            "statistically_eligible": [True],
         },
     )
 
     assert result["step_index"] == 5
     assert result["step_indices"] == [0, 2, 5]
     assert result["trustworthy"]
+    assert result["recovery_frontier_step"] == 5
+    assert result["recovery_trustworthy"]
+
+
+def test_complete_frontier_does_not_invent_window_without_recovery():
+    scan = TeacherForcedScan(
+        token_signals=None,
+        step_indices=[0, 1],
+        step_jsd=[0.2, 0.1],
+        step_margin_drop=[0.2, 0.1],
+        step_nll_gap=[0.2, 0.1],
+        shortlist=[0, 1],
+    )
+    result = complete_frontier(
+        scan,
+        {
+            "gain_step_indices": [0, 1],
+            "specific_gain": [0.0, 0.0],
+            "bypass_ci_lower": [0.0, 0.0],
+            "bypass_ci_upper": [0.0, 0.0],
+            "detection_ci_lower": [0.0, 0.0],
+            "statistically_eligible": [True, True],
+        },
+    )
+
+    assert result["first_error_step"] == 0
+    assert result["recovery_frontier_step"] is None
+    assert result["frontier_window"] is None

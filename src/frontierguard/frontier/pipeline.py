@@ -39,6 +39,8 @@ def scan_teacher_forced(
     *,
     detector: FrontierDetector | None = None,
     shortlist_size: int = 5,
+    exhaustive_step_threshold: int = 16,
+    candidate_neighbor_radius: int = 1,
     progress_callback: ScanProgressCallback | None = None,
 ) -> TeacherForcedScan:
     """Compare BF16 and quantized logits under exactly the same token prefix.
@@ -66,7 +68,14 @@ def scan_teacher_forced(
     step_margin = [item["q95"] for item in margin]
     step_nll = [item["mean"] for item in nll]
     active_detector = detector or FrontierDetector()
-    shortlist = active_detector.shortlist(step_jsd, step_margin, top_k=shortlist_size)
+    shortlist = active_detector.shortlist(
+        step_jsd,
+        step_margin,
+        nll_gap=step_nll,
+        top_k=shortlist_size,
+        exhaustive_threshold=exhaustive_step_threshold,
+        neighbor_radius=candidate_neighbor_radius,
+    )
     return TeacherForcedScan(
         token_signals=signals,
         step_indices=list(range(len(target_spans))),
@@ -85,6 +94,8 @@ def scan_teacher_forced_low_memory(
     *,
     detector: FrontierDetector | None = None,
     shortlist_size: int = 5,
+    exhaustive_step_threshold: int = 16,
+    candidate_neighbor_radius: int = 1,
     top_k: int = 32,
     progress_callback: ScanProgressCallback | None = None,
 ) -> TeacherForcedScan:
@@ -140,7 +151,14 @@ def scan_teacher_forced_low_memory(
             progress_callback("quantized", index, len(target_spans))
 
     active_detector = detector or FrontierDetector()
-    shortlist = active_detector.shortlist(step_jsd, step_margin, top_k=shortlist_size)
+    shortlist = active_detector.shortlist(
+        step_jsd,
+        step_margin,
+        nll_gap=step_nll,
+        top_k=shortlist_size,
+        exhaustive_threshold=exhaustive_step_threshold,
+        neighbor_radius=candidate_neighbor_radius,
+    )
     return TeacherForcedScan(
         token_signals=None,
         step_indices=list(range(len(target_spans))),

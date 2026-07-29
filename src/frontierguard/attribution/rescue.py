@@ -16,12 +16,15 @@ class RescueObservation:
     step_index: int
     module_name: str
     local_rescue: float
-    outcome_rescue: float
-    frontier_confidence: float = 1.0
+    outcome_rescue: float | None
+    frontier_confidence: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def combined(self, local_weight: float = 0.3) -> float:
-        return self.frontier_confidence * (
+        confidence = 1.0 if self.frontier_confidence is None else self.frontier_confidence
+        if self.outcome_rescue is None:
+            return confidence * self.local_rescue
+        return confidence * (
             local_weight * self.local_rescue + (1.0 - local_weight) * self.outcome_rescue
         )
 

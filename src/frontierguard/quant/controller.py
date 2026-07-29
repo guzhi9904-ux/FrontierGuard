@@ -103,6 +103,26 @@ class QuantizationController:
                     self.wrappers[name].materialize()
 
     @contextlib.contextmanager
+    def straight_through_gradients(self) -> Iterator[None]:
+        """Use identity gradients through activation fake quantizers.
+
+        This context changes gradients only. Forward values remain exactly the
+        same quantize/dequantize values used by the reference backend.
+        """
+
+        previous = {
+            name: wrapper.gradient_ste_enabled
+            for name, wrapper in self.wrappers.items()
+        }
+        for wrapper in self.wrappers.values():
+            wrapper.gradient_ste_enabled = True
+        try:
+            yield
+        finally:
+            for name, enabled in previous.items():
+                self.wrappers[name].gradient_ste_enabled = enabled
+
+    @contextlib.contextmanager
     def intervention(
         self,
         module_names: Sequence[str],

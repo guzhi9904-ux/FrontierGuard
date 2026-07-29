@@ -13,4 +13,7 @@ experiment:
     projections: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
   rescue:
     local_weight: 0.30
-    actions: [bf16_oracle, w8_static]
+    frontier_field: recovery_frontier_step
+    target_scopes: [step, window]
+    components: [weight, activation, weight_activation]
+    actions: [bf16_oracle, component_preserving_w8]

@@ -9,7 +9,7 @@ from frontierguard.io import read_json, read_jsonl, write_jsonl
 from frontierguard.models.hf_runner import HFRunner, SamplingConfig
 from frontierguard.quant.factory import REFERENCE_BACKENDS, instrument_reference_backend
 from frontierguard.schemas import GenerationRecord, PrecisionMap
-from frontierguard.traces.verify import extract_final_answer, verify_math_answer
+from frontierguard.traces.verify import classify_generation, extract_answer_details
 from frontierguard.utils.reproducibility import stable_run_id
 
 
@@ -61,7 +61,14 @@ def main() -> None:
         for seed in args.seeds:
             sampling = SamplingConfig(max_new_tokens=args.max_new_tokens, seed=seed)
             generated = runner.generate(prompt_ids, sampling)
-            extracted = extract_final_answer(generated["text"])
+            extraction = extract_answer_details(generated["text"])
+            failure = classify_generation(
+                generated["text"],
+                extraction,
+                str(row["answer"]),
+                truncated=generated["truncated"],
+            )
+            extracted = extraction.answer
             record = GenerationRecord(
                 run_id=run_id,
                 problem_id=str(row["id"]),
@@ -69,7 +76,7 @@ def main() -> None:
                 seed=seed,
                 output=generated["text"],
                 extracted_answer=extracted,
-                correct=verify_math_answer(extracted, str(row["answer"])),
+                correct=bool(failure["correct"]),
                 prompt_tokens=int(prompt_ids.shape[-1]),
                 output_tokens=generated["output_tokens"],
                 truncated=generated["truncated"],
@@ -81,6 +88,8 @@ def main() -> None:
                         if runner.controller is not None
                         else {"backend": "bf16"}
                     ),
+                    "extraction": extraction.to_dict(),
+                    "failure": failure,
                 },
             )
             records.append(asdict(record))

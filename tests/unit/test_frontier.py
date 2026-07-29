@@ -84,3 +84,28 @@ def test_detector_never_claims_trust_without_a_confidence_lower_bound():
         bypass_gain=[0.0, 1.0],
     )
     assert not result.trustworthy
+
+
+def test_short_reasoning_traces_use_every_step():
+    detector = FrontierDetector()
+    assert detector.shortlist(
+        [0.1, 0.9, 0.2, 0.3],
+        [0.3, 0.2, 0.1, 0.9],
+        nll_gap=[0.4, 0.3, 0.2, 0.1],
+        top_k=1,
+        exhaustive_threshold=4,
+    ) == [0, 1, 2, 3]
+
+
+def test_long_trace_shortlist_adds_nll_candidates_and_neighbors():
+    detector = FrontierDetector()
+    selected = detector.shortlist(
+        [0.0] * 20,
+        [0.0] * 20,
+        nll_gap=[0.0] * 17 + [5.0, 0.0, 0.0],
+        top_k=2,
+        exhaustive_threshold=16,
+        neighbor_radius=1,
+    )
+
+    assert {16, 17, 18}.issubset(selected)
